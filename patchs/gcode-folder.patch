@@ -1,0 +1,64 @@
+diff --git a/FluidNC/data/ui/kiosk/index.html b/FluidNC/data/ui/kiosk/index.html
+index 48d61e1..038c5cc 100644
+--- a/FluidNC/data/ui/kiosk/index.html
++++ b/FluidNC/data/ui/kiosk/index.html
+@@ -183,7 +183,7 @@
+ 
+   function remove(f) {
+     if (!confirm('Delete “' + f.n + '” from the machine?')) { return; }
+-    fetch('/files?action=delete&filename=' + encodeURIComponent(f.n) + '&path=/', { cache: 'no-store' })
++    fetch('/files?action=delete&filename=' + encodeURIComponent(f.n) + '&path=/gcode', { cache: 'no-store' })
+       .then(function (r) { if (!r.ok) { throw new Error(); } })
+       .then(function () { files = files.filter(function (x) { return x !== f; }); renderList(false); return save(); })
+       .catch(function () { toast('Could not delete the file.'); });
+@@ -206,8 +206,8 @@
+       chain = chain.then(function () {
+         toast('Sending ' + name + '…');
+         var fd = new FormData();
+-        fd.append('path', '/');
+-        fd.append('/' + name + 'S', String(f.size));
++        fd.append('path', '/gcode/');
++        fd.append('/gcode/' + name + 'S', String(f.size));
+         fd.append('myfile[]', f, name);
+         return fetch('/files', { method: 'POST', body: fd }).then(function (r) {
+           if (!r.ok) { throw new Error('upload'); }
+diff --git a/FluidNC/src/Playlist.cpp b/FluidNC/src/Playlist.cpp
+index 212706b..84f111b 100644
+--- a/FluidNC/src/Playlist.cpp
++++ b/FluidNC/src/Playlist.cpp
+@@ -43,6 +43,7 @@ namespace {
+     // -------------------------------------------------------------- globals
+ 
+     const char* const CFG_FILE = "/playlist.cfg";
++    const char* const GCODE_DIR = "/gcode";  // user G-code files live here, not in the LocalFS root
+ 
+     Macro    s_macro { "Playlist" };  // runs "$LocalFS/Run=..." or the go-home move
+     volatile bool s_launch_done = false;
+@@ -148,7 +149,9 @@ namespace {
+     std::vector<Entry> scan_files() {
+         std::vector<Entry> found;
+         try {
+-            FluidPath dir { "/", LocalFS };
++            FluidPath dir { GCODE_DIR, LocalFS };
++            std::error_code ec;
++            stdfs::create_directories(dir, ec);  // first boot: folder does not exist yet
+             for (auto const& de : stdfs::directory_iterator { dir }) {
+                 if (de.is_directory()) {
+                     continue;
+@@ -270,7 +273,7 @@ namespace {
+ 
+     void launch_current() {
+         s_abort0 = Job::abort_count();
+-        launch_macro("$LocalFS/Run=/" + s_seq[s_idx]);
++        launch_macro(std::string("$LocalFS/Run=") + GCODE_DIR + "/" + s_seq[s_idx]);
+         s_state = PState::Launching;
+     }
+ 
+@@ -398,6 +401,7 @@ namespace {
+         explicit PlaylistModule(const char* name) : Module(name) {}
+ 
+         void init() override {
++            scan_files();  // creates the /gcode folder if missing
+             new ReportCommand("PLQ", "Playlist/Status", cmd_status, anyState, WG);
+             new ReportCommand("PLS", "Playlist/Save", cmd_save, anyState, WG);
+             new ReportCommand("PLG", "Playlist/Start", cmd_start, anyState, WG);

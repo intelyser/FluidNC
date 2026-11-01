@@ -6,11 +6,17 @@
 #include "Serial.h"    // allChannels
 #include "Protocol.h"  // unwind_cause
 #include <map>
+#include <atomic>
 #include <vector>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
 std::vector<JobSource*> job;
+
+static std::atomic<uint32_t> s_abort_count { 0 };
+uint32_t Job::abort_count() {
+    return s_abort_count.load();
+}
 
 // A job's channel used to be the one Channel in the system deleted directly
 // rather than handed to AllChannels::kill() and its reaper, so nothing checked
@@ -173,6 +179,9 @@ void Job::abort(Error status) {
     std::vector<PendingAck> acks_owed;
     {
         JobLock lock;
+        if (active_nl()) {
+            ++s_abort_count;
+        }
         // Kill all active jobs
         while (active_nl()) {
             pop(acks_owed);
@@ -198,6 +207,7 @@ bool Job::consume_unwind_cause() {
         if (!unwind_cause) {
             return false;
         }
+        ++s_abort_count;
         while (active_nl()) {
             pop(acks_owed);
         }

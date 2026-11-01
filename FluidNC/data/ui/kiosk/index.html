@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Machine</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --card: #ffffff; --ink: #1c2330; --muted: #667085; --line: #d9dde5;
+    --green: #1e8e3e; --amber: #e8a100; --red: #c62828; --blue: #1a62d6; --disabled: #c9ced8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14171d; --card: #1e232c; --ink: #eef1f6; --muted: #98a2b3; --line: #343b48; --disabled: #3a4150; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 18px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 16px; }
+  #status { font-size: 22px; font-weight: 600; min-height: 1.4em; }
+  #status small { display: block; font-size: 16px; font-weight: 400; color: var(--muted); }
+  #status.run { color: var(--green); } #status.pause { color: var(--amber); } #status.bad { color: var(--red); }
+  .buttons { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 14px; }
+  button { font: inherit; border: 0; border-radius: 12px; cursor: pointer; color: #fff; }
+  .big { font-size: 24px; font-weight: 700; padding: 22px 8px; }
+  #bStart { background: var(--green); } #bPause { background: var(--amber); color: #1c2330; } #bEnd { background: var(--red); }
+  #bPause.resume { background: var(--blue); color: #fff; }
+  button:disabled { background: var(--disabled) !important; color: var(--muted) !important; cursor: not-allowed; }
+  #unlockRow { display: none; margin-top: 12px; } #unlockRow button { background: var(--blue); padding: 14px 18px; font-size: 20px; }
+  h2 { margin: 0 0 4px; font-size: 20px; }
+  .hint { color: var(--muted); font-size: 16px; margin: 0 0 12px; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { display: flex; align-items: center; gap: 10px; padding: 10px 4px; border-top: 1px solid var(--line); }
+  li:first-child { border-top: 0; }
+  li.now { background: color-mix(in srgb, var(--green) 14%, transparent); border-radius: 8px; }
+  li input[type=checkbox] { width: 28px; height: 28px; flex: none; accent-color: var(--green); }
+  .name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .name small { color: var(--muted); margin-left: 6px; }
+  .mini { background: var(--bg); color: var(--ink); border: 1px solid var(--line); width: 44px; height: 44px; font-size: 20px; padding: 0; flex: none; }
+  .mini.del { color: var(--red); }
+  .mini:disabled { opacity: .35; }
+  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .add { background: var(--blue); padding: 14px 18px; font-size: 20px; font-weight: 600; }
+  label.rep { display: flex; align-items: center; gap: 10px; font-size: 20px; margin-top: 14px; }
+  label.rep input { width: 28px; height: 28px; accent-color: var(--green); }
+  #drop.over { outline: 3px dashed var(--blue); outline-offset: 4px; }
+  #empty { color: var(--muted); padding: 12px 4px; }
+  #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: #222; color: #fff; padding: 12px 18px; border-radius: 10px; display: none; max-width: 90%; }
+</style>
+</head>
+<body>
+<main>
+  <section class="card">
+    <div id="status">Connecting…</div>
+    <div class="buttons">
+      <button id="bStart" class="big" disabled>Start</button>
+      <button id="bPause" class="big" disabled>Pause</button>
+      <button id="bEnd" class="big" disabled>End</button>
+    </div>
+    <div id="unlockRow"><button id="bUnlock">The machine is locked – press to unlock</button></div>
+  </section>
+
+  <section class="card" id="drop">
+    <h2>Programs</h2>
+    <p class="hint">Tick the programs to run, in the order shown. Use the arrows to change the order.</p>
+    <ul id="list"></ul>
+    <div id="empty" hidden>No programs yet. Press “Add programs”.</div>
+    <label class="rep"><input type="checkbox" id="repeat"> Repeat again and again</label>
+    <div class="row" style="margin-top:14px">
+      <button class="add" id="bAdd">+ Add programs</button>
+      <input type="file" id="file" multiple accept=".gcode,.gc,.nc,.ngc" hidden>
+    </div>
+  </section>
+</main>
+<div id="toast"></div>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var files = [];            // [{n, c, s}] in order
+  var repeat = false;
+  var state = 'idle', alarm = false;
+  var dirty = 0;             // >0 while local edits are being saved
+  var failCount = 0;
+
+  function toast(msg) {
+    var t = $('toast'); t.textContent = msg; t.style.display = 'block';
+    clearTimeout(toast._t); toast._t = setTimeout(function () { t.style.display = 'none'; }, 4000);
+  }
+
+  function cmd(c) {
+    return fetch('/command?plain=' + encodeURIComponent(c), { cache: 'no-store' }).then(function (r) {
+      if (!r.ok) { throw new Error('HTTP ' + r.status); }
+      return r.text();
+    });
+  }
+
+  function size(n) { return n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(1) + ' MB'; }
+
+  // ---- talking to the playlist ----
+  function parseStatus(text) {
+    var a = text.indexOf('[PLAYLIST:'), b = text.lastIndexOf(']');
+    if (a < 0 || b < a) { throw new Error('bad status'); }
+    return JSON.parse(text.substring(a + 10, b));
+  }
+
+  function poll() {
+    cmd('$Playlist/Status').then(function (t) {
+      failCount = 0;
+      render(parseStatus(t));
+    }).catch(function () {
+      if (++failCount >= 2) { setStatus('Waiting for the machine…', 'bad', ''); }
+    }).then(function () { setTimeout(poll, 1000); });
+  }
+
+  function setStatus(main, cls, sub) {
+    var el = $('status');
+    el.className = cls || '';
+    el.textContent = main;
+    if (sub) { var s = document.createElement('small'); s.textContent = sub; el.appendChild(s); }
+  }
+
+  var current = '';
+  function render(st) {
+    state = st.state; alarm = st.alarm; current = st.current || '';
+    if (!dirty) { files = st.files; repeat = st.repeat; }
+    var running = state === 'running' || state === 'paused';
+    var nChecked = files.filter(function (f) { return f.c; }).length;
+
+    if (state === 'running') { setStatus('Running', 'run', current + (st.total > 1 ? '  (' + st.position + ' of ' + st.total + ')' : '')); }
+    else if (state === 'paused') { setStatus('Paused', 'pause', current); }
+    else if (state === 'ending') { setStatus('Stopping – going to the home position…', 'pause', ''); }
+    else if (alarm) { setStatus('Machine locked', 'bad', st.message); }
+    else { setStatus('Ready', '', st.message); }
+
+    $('bStart').disabled = state !== 'idle' || alarm || nChecked === 0;
+    var p = $('bPause');
+    p.disabled = !running;
+    p.textContent = state === 'paused' ? 'Resume' : 'Pause';
+    p.className = 'big' + (state === 'paused' ? ' resume' : '');
+    $('bEnd').disabled = state === 'ending';
+    $('unlockRow').style.display = alarm && state === 'idle' ? 'block' : 'none';
+    $('bAdd').disabled = running || state === 'ending';
+    if (!dirty) { renderList(running || state === 'ending'); }
+    $('repeat').checked = repeat;
+  }
+
+  function renderList(locked) {
+    var ul = $('list');
+    ul.textContent = '';
+    $('empty').hidden = files.length > 0;
+    files.forEach(function (f, i) {
+      var li = document.createElement('li');
+      if (locked && f.n === current) { li.className = 'now'; }
+      var cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!f.c; cb.disabled = locked;
+      cb.onchange = function () { f.c = cb.checked ? 1 : 0; save(); };
+      var nm = document.createElement('div'); nm.className = 'name';
+      nm.appendChild(document.createTextNode(f.n.replace(/\.[^.]+$/, '')));
+      var sm = document.createElement('small'); sm.textContent = size(f.s); nm.appendChild(sm);
+      var up = mini('▲', 'Move up', locked || i === 0, function () { swap(i, i - 1); });
+      var dn = mini('▼', 'Move down', locked || i === files.length - 1, function () { swap(i, i + 1); });
+      var del = mini('🗑', 'Delete', locked, function () { remove(f); });
+      del.className += ' del';
+      [cb, nm, up, dn, del].forEach(function (e) { li.appendChild(e); });
+      ul.appendChild(li);
+    });
+  }
+
+  function mini(label, title, disabled, fn) {
+    var b = document.createElement('button');
+    b.className = 'mini'; b.textContent = label; b.title = title; b.setAttribute('aria-label', title);
+    b.disabled = disabled; b.onclick = fn; return b;
+  }
+
+  function swap(i, j) { var t = files[i]; files[i] = files[j]; files[j] = t; renderList(false); save(); }
+
+  function save() {
+    dirty++;
+    var s = (repeat ? '1' : '0') + files.map(function (f) { return '|' + (f.c ? '1' : '0') + f.n; }).join('');
+    return cmd('$Playlist/Save=' + s).catch(function () { toast('Could not save. Try again.'); })
+      .then(function () { dirty--; });
+  }
+
+  function remove(f) {
+    if (!confirm('Delete “' + f.n + '” from the machine?')) { return; }
+    fetch('/files?action=delete&filename=' + encodeURIComponent(f.n) + '&path=/gcode', { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) { throw new Error(); } })
+      .then(function () { files = files.filter(function (x) { return x !== f; }); renderList(false); return save(); })
+      .catch(function () { toast('Could not delete the file.'); });
+  }
+
+  // ---- upload ----
+  function safeName(name) { return name.replace(/[^A-Za-z0-9._-]+/g, '_'); }
+  var ALLOWED = /\.(gcode|gc|nc|ngc)$/i;
+
+  function upload(list) {
+    var arr = Array.prototype.slice.call(list).filter(function (f) {
+      if (!ALLOWED.test(f.name)) { toast('“' + f.name + '” is not a G-code file (.gcode).'); return false; }
+      return true;
+    });
+    if (!arr.length) { return; }
+    dirty++;
+    var chain = Promise.resolve();
+    arr.forEach(function (f) {
+      var name = safeName(f.name);
+      chain = chain.then(function () {
+        toast('Sending ' + name + '…');
+        var fd = new FormData();
+        fd.append('path', '/gcode/');
+        fd.append('/gcode/' + name + 'S', String(f.size));
+        fd.append('myfile[]', f, name);
+        return fetch('/files', { method: 'POST', body: fd }).then(function (r) {
+          if (!r.ok) { throw new Error('upload'); }
+          if (!files.some(function (x) { return x.n === name; })) { files.push({ n: name, c: 0, s: f.size }); }
+        });
+      });
+    });
+    chain.then(function () { toast('Done.'); })
+      .catch(function () { toast('Sending failed. Is the machine running?'); })
+      .then(function () { dirty--; return save(); })
+      .then(function () { renderList(false); });
+  }
+
+  // ---- wiring ----
+  $('bStart').onclick = function () { $('bStart').disabled = true; cmd('$Playlist/Start').catch(function () { toast('Could not start.'); }); };
+  $('bPause').onclick = function () { cmd(state === 'paused' ? '$Playlist/Resume' : '$Playlist/Pause').catch(function () { toast('Could not send.'); }); };
+  $('bEnd').onclick = function () {
+    if (confirm('Stop now and return to the home position?')) { cmd('$Playlist/End').catch(function () { toast('Could not send.'); }); }
+  };
+  $('bUnlock').onclick = function () { cmd('$X').catch(function () { toast('Could not unlock.'); }); };
+  $('repeat').onchange = function () { repeat = $('repeat').checked; save(); };
+  $('bAdd').onclick = function () { $('file').click(); };
+  $('file').onchange = function () { upload($('file').files); $('file').value = ''; };
+  var drop = $('drop');
+  ['dragenter', 'dragover'].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('over'); }); });
+  ['dragleave', 'drop'].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('over'); }); });
+  drop.addEventListener('drop', function (e) { upload(e.dataTransfer.files); });
+
+  poll();
+})();
+</script>
+</body>
+</html>

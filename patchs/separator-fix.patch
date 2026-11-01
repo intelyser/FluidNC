@@ -1,0 +1,35 @@
+diff --git a/FluidNC/data/ui/kiosk/index.html b/FluidNC/data/ui/kiosk/index.html
+index 038c5cc..410249b 100644
+--- a/FluidNC/data/ui/kiosk/index.html
++++ b/FluidNC/data/ui/kiosk/index.html
+@@ -176,7 +176,7 @@
+ 
+   function save() {
+     dirty++;
+-    var s = (repeat ? '1' : '0') + files.map(function (f) { return '~' + (f.c ? '1' : '0') + f.n; }).join('');
++    var s = (repeat ? '1' : '0') + files.map(function (f) { return '|' + (f.c ? '1' : '0') + f.n; }).join('');
+     return cmd('$Playlist/Save=' + s).catch(function () { toast('Could not save. Try again.'); })
+       .then(function () { dirty--; });
+   }
+diff --git a/FluidNC/src/Playlist.cpp b/FluidNC/src/Playlist.cpp
+index 84f111b..81cdc87 100644
+--- a/FluidNC/src/Playlist.cpp
++++ b/FluidNC/src/Playlist.cpp
+@@ -285,7 +285,7 @@ namespace {
+         return Error::Ok;
+     }
+ 
+-    // $Playlist/Save=<repeat 0|1>~<flag><name>~<flag><name>...   flag is 1 (checked) or 0
++    // $Playlist/Save=<repeat 0|1>|<flag><name>|<flag><name>...   flag is 1 (checked) or 0
+     Error cmd_save(const char* param, AuthenticationLevel, Channel& out) {
+         std::string        s(param ? param : "");
+         std::vector<Entry> list;
+@@ -293,7 +293,7 @@ namespace {
+         size_t             pos    = 0;
+         bool               first  = true;
+         while (pos <= s.size()) {
+-            size_t      end = s.find('~', pos);
++            size_t      end = s.find('|', pos);
+             std::string tok = s.substr(pos, end == std::string::npos ? std::string::npos : end - pos);
+             if (first) {
+                 repeat = !tok.empty() && tok[0] == '1';

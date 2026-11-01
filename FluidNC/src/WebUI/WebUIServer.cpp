@@ -862,6 +862,12 @@ namespace WebUI {
     bool WebUI_Server::isAllowedInMotion(String cmd) {
         if (cmd.startsWith("[ESP800]"))
             return true;
+        // Kiosk page: status and the three buttons must work while the machine moves
+        String up = cmd;
+        up.toUpperCase();
+        if (up.startsWith("$PLAYLIST/STATUS") || up.startsWith("$PLAYLIST/PAUSE") || up.startsWith("$PLAYLIST/RESUME") ||
+            up.startsWith("$PLAYLIST/END"))
+            return true;
 
         return false;
     }
@@ -884,7 +890,8 @@ namespace WebUI {
             return;
         }
         if (request->hasParam("plain")) {
-            synchronousCommand(request, request->getParam("plain")->value().c_str(), silent, auth_level);
+            String plain = request->getParam("plain")->value();
+            synchronousCommand(request, plain.c_str(), silent, auth_level, isAllowedInMotion(plain));
             return;
         }
         request->send(500, "text/plain", "Invalid command");

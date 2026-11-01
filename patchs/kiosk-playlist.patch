@@ -1,0 +1,932 @@
+diff --git a/FluidNC/data/ui/kiosk/index.html b/FluidNC/data/ui/kiosk/index.html
+new file mode 100644
+index 0000000..48d61e1
+--- /dev/null
++++ b/FluidNC/data/ui/kiosk/index.html
+@@ -0,0 +1,243 @@
++<!doctype html>
++<html lang="en">
++<head>
++<meta charset="utf-8">
++<meta name="viewport" content="width=device-width, initial-scale=1">
++<title>Machine</title>
++<style>
++  :root {
++    --bg: #f4f5f7; --card: #ffffff; --ink: #1c2330; --muted: #667085; --line: #d9dde5;
++    --green: #1e8e3e; --amber: #e8a100; --red: #c62828; --blue: #1a62d6; --disabled: #c9ced8;
++  }
++  @media (prefers-color-scheme: dark) {
++    :root { --bg: #14171d; --card: #1e232c; --ink: #eef1f6; --muted: #98a2b3; --line: #343b48; --disabled: #3a4150; }
++  }
++  * { box-sizing: border-box; }
++  body { margin: 0; background: var(--bg); color: var(--ink); font: 18px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
++  main { max-width: 720px; margin: 0 auto; padding: 16px; }
++  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 16px; }
++  #status { font-size: 22px; font-weight: 600; min-height: 1.4em; }
++  #status small { display: block; font-size: 16px; font-weight: 400; color: var(--muted); }
++  #status.run { color: var(--green); } #status.pause { color: var(--amber); } #status.bad { color: var(--red); }
++  .buttons { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 14px; }
++  button { font: inherit; border: 0; border-radius: 12px; cursor: pointer; color: #fff; }
++  .big { font-size: 24px; font-weight: 700; padding: 22px 8px; }
++  #bStart { background: var(--green); } #bPause { background: var(--amber); color: #1c2330; } #bEnd { background: var(--red); }
++  #bPause.resume { background: var(--blue); color: #fff; }
++  button:disabled { background: var(--disabled) !important; color: var(--muted) !important; cursor: not-allowed; }
++  #unlockRow { display: none; margin-top: 12px; } #unlockRow button { background: var(--blue); padding: 14px 18px; font-size: 20px; }
++  h2 { margin: 0 0 4px; font-size: 20px; }
++  .hint { color: var(--muted); font-size: 16px; margin: 0 0 12px; }
++  ul { list-style: none; margin: 0; padding: 0; }
++  li { display: flex; align-items: center; gap: 10px; padding: 10px 4px; border-top: 1px solid var(--line); }
++  li:first-child { border-top: 0; }
++  li.now { background: color-mix(in srgb, var(--green) 14%, transparent); border-radius: 8px; }
++  li input[type=checkbox] { width: 28px; height: 28px; flex: none; accent-color: var(--green); }
++  .name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
++  .name small { color: var(--muted); margin-left: 6px; }
++  .mini { background: var(--bg); color: var(--ink); border: 1px solid var(--line); width: 44px; height: 44px; font-size: 20px; padding: 0; flex: none; }
++  .mini.del { color: var(--red); }
++  .mini:disabled { opacity: .35; }
++  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
++  .add { background: var(--blue); padding: 14px 18px; font-size: 20px; font-weight: 600; }
++  label.rep { display: flex; align-items: center; gap: 10px; font-size: 20px; margin-top: 14px; }
++  label.rep input { width: 28px; height: 28px; accent-color: var(--green); }
++  #drop.over { outline: 3px dashed var(--blue); outline-offset: 4px; }
++  #empty { color: var(--muted); padding: 12px 4px; }
++  #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: #222; color: #fff; padding: 12px 18px; border-radius: 10px; display: none; max-width: 90%; }
++</style>
++</head>
++<body>
++<main>
++  <section class="card">
++    <div id="status">Connecting…</div>
++    <div class="buttons">
++      <button id="bStart" class="big" disabled>Start</button>
++      <button id="bPause" class="big" disabled>Pause</button>
++      <button id="bEnd" class="big" disabled>End</button>
++    </div>
++    <div id="unlockRow"><button id="bUnlock">The machine is locked – press to unlock</button></div>
++  </section>
++
++  <section class="card" id="drop">
++    <h2>Programs</h2>
++    <p class="hint">Tick the programs to run, in the order shown. Use the arrows to change the order.</p>
++    <ul id="list"></ul>
++    <div id="empty" hidden>No programs yet. Press “Add programs”.</div>
++    <label class="rep"><input type="checkbox" id="repeat"> Repeat again and again</label>
++    <div class="row" style="margin-top:14px">
++      <button class="add" id="bAdd">+ Add programs</button>
++      <input type="file" id="file" multiple accept=".gcode,.gc,.nc,.ngc" hidden>
++    </div>
++  </section>
++</main>
++<div id="toast"></div>
++
++<script>
++(function () {
++  'use strict';
++  var $ = function (id) { return document.getElementById(id); };
++  var files = [];            // [{n, c, s}] in order
++  var repeat = false;
++  var state = 'idle', alarm = false;
++  var dirty = 0;             // >0 while local edits are being saved
++  var failCount = 0;
++
++  function toast(msg) {
++    var t = $('toast'); t.textContent = msg; t.style.display = 'block';
++    clearTimeout(toast._t); toast._t = setTimeout(function () { t.style.display = 'none'; }, 4000);
++  }
++
++  function cmd(c) {
++    return fetch('/command?plain=' + encodeURIComponent(c), { cache: 'no-store' }).then(function (r) {
++      if (!r.ok) { throw new Error('HTTP ' + r.status); }
++      return r.text();
++    });
++  }
++
++  function size(n) { return n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(1) + ' MB'; }
++
++  // ---- talking to the playlist ----
++  function parseStatus(text) {
++    var a = text.indexOf('[PLAYLIST:'), b = text.lastIndexOf(']');
++    if (a < 0 || b < a) { throw new Error('bad status'); }
++    return JSON.parse(text.substring(a + 10, b));
++  }
++
++  function poll() {
++    cmd('$Playlist/Status').then(function (t) {
++      failCount = 0;
++      render(parseStatus(t));
++    }).catch(function () {
++      if (++failCount >= 2) { setStatus('Waiting for the machine…', 'bad', ''); }
++    }).then(function () { setTimeout(poll, 1000); });
++  }
++
++  function setStatus(main, cls, sub) {
++    var el = $('status');
++    el.className = cls || '';
++    el.textContent = main;
++    if (sub) { var s = document.createElement('small'); s.textContent = sub; el.appendChild(s); }
++  }
++
++  var current = '';
++  function render(st) {
++    state = st.state; alarm = st.alarm; current = st.current || '';
++    if (!dirty) { files = st.files; repeat = st.repeat; }
++    var running = state === 'running' || state === 'paused';
++    var nChecked = files.filter(function (f) { return f.c; }).length;
++
++    if (state === 'running') { setStatus('Running', 'run', current + (st.total > 1 ? '  (' + st.position + ' of ' + st.total + ')' : '')); }
++    else if (state === 'paused') { setStatus('Paused', 'pause', current); }
++    else if (state === 'ending') { setStatus('Stopping – going to the home position…', 'pause', ''); }
++    else if (alarm) { setStatus('Machine locked', 'bad', st.message); }
++    else { setStatus('Ready', '', st.message); }
++
++    $('bStart').disabled = state !== 'idle' || alarm || nChecked === 0;
++    var p = $('bPause');
++    p.disabled = !running;
++    p.textContent = state === 'paused' ? 'Resume' : 'Pause';
++    p.className = 'big' + (state === 'paused' ? ' resume' : '');
++    $('bEnd').disabled = state === 'ending';
++    $('unlockRow').style.display = alarm && state === 'idle' ? 'block' : 'none';
++    $('bAdd').disabled = running || state === 'ending';
++    if (!dirty) { renderList(running || state === 'ending'); }
++    $('repeat').checked = repeat;
++  }
++
++  function renderList(locked) {
++    var ul = $('list');
++    ul.textContent = '';
++    $('empty').hidden = files.length > 0;
++    files.forEach(function (f, i) {
++      var li = document.createElement('li');
++      if (locked && f.n === current) { li.className = 'now'; }
++      var cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!f.c; cb.disabled = locked;
++      cb.onchange = function () { f.c = cb.checked ? 1 : 0; save(); };
++      var nm = document.createElement('div'); nm.className = 'name';
++      nm.appendChild(document.createTextNode(f.n.replace(/\.[^.]+$/, '')));
++      var sm = document.createElement('small'); sm.textContent = size(f.s); nm.appendChild(sm);
++      var up = mini('▲', 'Move up', locked || i === 0, function () { swap(i, i - 1); });
++      var dn = mini('▼', 'Move down', locked || i === files.length - 1, function () { swap(i, i + 1); });
++      var del = mini('🗑', 'Delete', locked, function () { remove(f); });
++      del.className += ' del';
++      [cb, nm, up, dn, del].forEach(function (e) { li.appendChild(e); });
++      ul.appendChild(li);
++    });
++  }
++
++  function mini(label, title, disabled, fn) {
++    var b = document.createElement('button');
++    b.className = 'mini'; b.textContent = label; b.title = title; b.setAttribute('aria-label', title);
++    b.disabled = disabled; b.onclick = fn; return b;
++  }
++
++  function swap(i, j) { var t = files[i]; files[i] = files[j]; files[j] = t; renderList(false); save(); }
++
++  function save() {
++    dirty++;
++    var s = (repeat ? '1' : '0') + files.map(function (f) { return '~' + (f.c ? '1' : '0') + f.n; }).join('');
++    return cmd('$Playlist/Save=' + s).catch(function () { toast('Could not save. Try again.'); })
++      .then(function () { dirty--; });
++  }
++
++  function remove(f) {
++    if (!confirm('Delete “' + f.n + '” from the machine?')) { return; }
++    fetch('/files?action=delete&filename=' + encodeURIComponent(f.n) + '&path=/', { cache: 'no-store' })
++      .then(function (r) { if (!r.ok) { throw new Error(); } })
++      .then(function () { files = files.filter(function (x) { return x !== f; }); renderList(false); return save(); })
++      .catch(function () { toast('Could not delete the file.'); });
++  }
++
++  // ---- upload ----
++  function safeName(name) { return name.replace(/[^A-Za-z0-9._-]+/g, '_'); }
++  var ALLOWED = /\.(gcode|gc|nc|ngc)$/i;
++
++  function upload(list) {
++    var arr = Array.prototype.slice.call(list).filter(function (f) {
++      if (!ALLOWED.test(f.name)) { toast('“' + f.name + '” is not a G-code file (.gcode).'); return false; }
++      return true;
++    });
++    if (!arr.length) { return; }
++    dirty++;
++    var chain = Promise.resolve();
++    arr.forEach(function (f) {
++      var name = safeName(f.name);
++      chain = chain.then(function () {
++        toast('Sending ' + name + '…');
++        var fd = new FormData();
++        fd.append('path', '/');
++        fd.append('/' + name + 'S', String(f.size));
++        fd.append('myfile[]', f, name);
++        return fetch('/files', { method: 'POST', body: fd }).then(function (r) {
++          if (!r.ok) { throw new Error('upload'); }
++          if (!files.some(function (x) { return x.n === name; })) { files.push({ n: name, c: 0, s: f.size }); }
++        });
++      });
++    });
++    chain.then(function () { toast('Done.'); })
++      .catch(function () { toast('Sending failed. Is the machine running?'); })
++      .then(function () { dirty--; return save(); })
++      .then(function () { renderList(false); });
++  }
++
++  // ---- wiring ----
++  $('bStart').onclick = function () { $('bStart').disabled = true; cmd('$Playlist/Start').catch(function () { toast('Could not start.'); }); };
++  $('bPause').onclick = function () { cmd(state === 'paused' ? '$Playlist/Resume' : '$Playlist/Pause').catch(function () { toast('Could not send.'); }); };
++  $('bEnd').onclick = function () {
++    if (confirm('Stop now and return to the home position?')) { cmd('$Playlist/End').catch(function () { toast('Could not send.'); }); }
++  };
++  $('bUnlock').onclick = function () { cmd('$X').catch(function () { toast('Could not unlock.'); }); };
++  $('repeat').onchange = function () { repeat = $('repeat').checked; save(); };
++  $('bAdd').onclick = function () { $('file').click(); };
++  $('file').onchange = function () { upload($('file').files); $('file').value = ''; };
++  var drop = $('drop');
++  ['dragenter', 'dragover'].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('over'); }); });
++  ['dragleave', 'drop'].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('over'); }); });
++  drop.addEventListener('drop', function (e) { upload(e.dataTransfer.files); });
++
++  poll();
++})();
++</script>
++</body>
++</html>
+diff --git a/FluidNC/src/Job.cpp b/FluidNC/src/Job.cpp
+index b5d5689..96a9c05 100644
+--- a/FluidNC/src/Job.cpp
++++ b/FluidNC/src/Job.cpp
+@@ -6,12 +6,18 @@
+ #include "Serial.h"    // allChannels
+ #include "Protocol.h"  // unwind_cause
+ #include <map>
++#include <atomic>
+ #include <vector>
+ #include <freertos/FreeRTOS.h>
+ #include <freertos/semphr.h>
+ 
+ std::vector<JobSource*> job;
+ 
++static std::atomic<uint32_t> s_abort_count { 0 };
++uint32_t Job::abort_count() {
++    return s_abort_count.load();
++}
++
+ // A job's channel used to be the one Channel in the system deleted directly
+ // rather than handed to AllChannels::kill() and its reaper, so nothing checked
+ // whether anyone still held a reference to it.
+@@ -173,6 +179,9 @@ void Job::abort(Error status) {
+     std::vector<PendingAck> acks_owed;
+     {
+         JobLock lock;
++        if (active_nl()) {
++            ++s_abort_count;
++        }
+         // Kill all active jobs
+         while (active_nl()) {
+             pop(acks_owed);
+@@ -198,6 +207,7 @@ bool Job::consume_unwind_cause() {
+         if (!unwind_cause) {
+             return false;
+         }
++        ++s_abort_count;
+         while (active_nl()) {
+             pop(acks_owed);
+         }
+diff --git a/FluidNC/src/Job.h b/FluidNC/src/Job.h
+index b3edbf3..dac2121 100644
+--- a/FluidNC/src/Job.h
++++ b/FluidNC/src/Job.h
+@@ -165,6 +165,10 @@ public:
+     // #1861). Returns true if it aborted a job.
+     static bool consume_unwind_cause();
+ 
++    // Number of times a running job has been killed (abort or unwind) since boot.
++    // Lets a supervisor tell "file finished" from "file was stopped by an error/reset".
++    static uint32_t abort_count();
++
+     static bool get_param(const std::string& name, float& value);
+     static bool set_param(const std::string& name, float value);
+     static bool param_exists(const std::string& name);
+diff --git a/FluidNC/src/Playlist.cpp b/FluidNC/src/Playlist.cpp
+new file mode 100644
+index 0000000..212706b
+--- /dev/null
++++ b/FluidNC/src/Playlist.cpp
+@@ -0,0 +1,556 @@
++// Playlist module: runs a user-ordered list of G-code files from the local
++// filesystem, one after the other, optionally repeating.  Designed to be driven
++// by a very simple web page (data/ui/kiosk/index.html) through a handful of
++// "$Playlist/..." commands sent over the existing /command?plain= HTTP route.
++//
++// Everything runs on the polling task (commands and Module::poll), so the
++// state below needs no locking.  The only things that must happen on the
++// protocol task -- starting a job, feed hold, reset, homing -- are done by
++// queueing events, exactly like a pin-triggered macro does.
++//
++// Use of this source code is governed by a GPLv3 license that can be found in the LICENSE file.
++
++#include "Module.h"
++#include "Settings.h"
++#include "Protocol.h"
++#include "System.h"
++#include "State.h"
++#include "Job.h"
++#include "Macro.h"
++#include "Logging.h"
++#include "FluidPath.h"
++#include "Machine/Axes.h"
++
++#include <freertos/FreeRTOS.h>
++#include <freertos/task.h>
++
++#include <algorithm>
++#include <cstdio>
++#include <string>
++#include <vector>
++
++namespace {
++    // ---------------------------------------------------------------- types
++
++    struct Entry {
++        std::string name;
++        bool        checked = false;
++        uintmax_t   size    = 0;
++    };
++
++    enum class PState { Idle, Launching, Running, Between, Ending, GoingHome };
++
++    // -------------------------------------------------------------- globals
++
++    const char* const CFG_FILE = "/playlist.cfg";
++
++    Macro    s_macro { "Playlist" };  // runs "$LocalFS/Run=..." or the go-home move
++    volatile bool s_launch_done = false;
++    volatile bool s_launch_ok   = false;
++
++    PState                   s_state = PState::Idle;
++    std::vector<std::string> s_seq;  // names captured at Start
++    size_t                   s_idx = 0;
++    bool                     s_repeat = false;
++    bool                     s_held   = false;  // user pressed Pause
++    bool                     s_resume_pending = false;
++    std::string              s_message;  // shown on the page when idle ("Finished", "Error ...")
++    uint32_t                 s_abort0 = 0;
++    int                      s_end_stage = 0;
++    TickType_t               s_stage_time = 0;
++
++    TickType_t now() {
++        return xTaskGetTickCount();
++    }
++    bool older_than(TickType_t since, uint32_t ms) {
++        return (now() - since) > pdMS_TO_TICKS(ms);
++    }
++
++    // ----------------------------------------------------------- launch event
++
++    // Runs on the protocol task.  Refuses to start if a job is already active,
++    // the same rule MacroEvent uses.
++    class LaunchEvent : public Event {
++    public:
++        void run(void*) const override {
++            s_launch_ok = false;
++            if (!Job::active()) {
++                s_launch_ok = s_macro.run(nullptr);
++            }
++            s_launch_done = true;
++        }
++    };
++    const LaunchEvent s_launch_event {};
++
++    void launch_macro(const std::string& gcode) {
++        s_macro.set(gcode);
++        s_launch_done = false;
++        s_launch_ok   = false;
++        protocol_send_event(&s_launch_event);
++    }
++
++    // --------------------------------------------------------- list storage
++
++    bool is_gcode_name(const std::string& n) {
++        auto dot = n.rfind('.');
++        if (dot == std::string::npos) {
++            return false;
++        }
++        std::string ext = n.substr(dot + 1);
++        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return (char)tolower(c); });
++        return ext == "gcode" || ext == "gc" || ext == "nc" || ext == "ngc";
++    }
++
++    std::string cfg_path() {
++        return FluidPath { CFG_FILE, LocalFS }.string();
++    }
++
++    // Saved order, as "flag name" pairs, plus the repeat flag.
++    void load_cfg(std::vector<Entry>& list, bool& repeat) {
++        list.clear();
++        repeat = false;
++        FILE* f = fopen(cfg_path().c_str(), "r");
++        if (!f) {
++            return;
++        }
++        char line[160];
++        while (fgets(line, sizeof line, f)) {
++            std::string s(line);
++            while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) {
++                s.pop_back();
++            }
++            if (s.rfind("repeat=", 0) == 0) {
++                repeat = s.size() > 7 && s[7] == '1';
++            } else if (s.size() > 2 && s[1] == '|') {
++                Entry e;
++                e.checked = s[0] == '1';
++                e.name    = s.substr(2);
++                list.push_back(e);
++            }
++        }
++        fclose(f);
++    }
++
++    void save_cfg(const std::vector<Entry>& list, bool repeat) {
++        FILE* f = fopen(cfg_path().c_str(), "w");
++        if (!f) {
++            log_error("Playlist: cannot write " << CFG_FILE);
++            return;
++        }
++        fprintf(f, "repeat=%d\n", repeat ? 1 : 0);
++        for (auto& e : list) {
++            fprintf(f, "%c|%s\n", e.checked ? '1' : '0', e.name.c_str());
++        }
++        fclose(f);
++    }
++
++    // G-code files currently in the LocalFS root, with sizes.
++    std::vector<Entry> scan_files() {
++        std::vector<Entry> found;
++        try {
++            FluidPath dir { "/", LocalFS };
++            for (auto const& de : stdfs::directory_iterator { dir }) {
++                if (de.is_directory()) {
++                    continue;
++                }
++                std::string n = de.path().filename().string();
++                if (is_gcode_name(n)) {
++                    Entry e;
++                    e.name = n;
++                    e.size = de.file_size();
++                    found.push_back(e);
++                }
++            }
++        } catch (std::exception const& ex) {
++            log_error("Playlist: cannot list files: " << ex.what());
++        }
++        return found;
++    }
++
++    // Saved order, minus files that no longer exist, plus new files (unchecked,
++    // alphabetical) at the end.
++    std::vector<Entry> merged_list(bool& repeat) {
++        std::vector<Entry> saved;
++        load_cfg(saved, repeat);
++        auto found = scan_files();
++        std::sort(found.begin(), found.end(), [](const Entry& a, const Entry& b) { return a.name < b.name; });
++
++        std::vector<Entry> out;
++        for (auto& s : saved) {
++            for (auto& f : found) {
++                if (f.name == s.name) {
++                    Entry e = s;
++                    e.size  = f.size;
++                    out.push_back(e);
++                    break;
++                }
++            }
++        }
++        for (auto& f : found) {
++            bool known = false;
++            for (auto& o : out) {
++                if (o.name == f.name) {
++                    known = true;
++                    break;
++                }
++            }
++            if (!known) {
++                out.push_back(f);
++            }
++        }
++        return out;
++    }
++
++    // ---------------------------------------------------------------- status
++
++    std::string json_escape(const std::string& s) {
++        std::string o;
++        for (char c : s) {
++            if (c == '"' || c == '\\') {
++                o += '\\';
++            }
++            if ((unsigned char)c >= 0x20) {
++                o += c;
++            }
++        }
++        return o;
++    }
++
++    const char* state_word() {
++        switch (s_state) {
++            case PState::Idle:
++                return "idle";
++            case PState::Ending:
++            case PState::GoingHome:
++                return "ending";
++            default:
++                return s_held ? "paused" : "running";
++        }
++    }
++
++    std::string status_json() {
++        bool  repeat;
++        auto  list = merged_list(repeat);
++        std::string j = "{\"state\":\"";
++        j += state_word();
++        j += "\",\"message\":\"" + json_escape(s_message) + "\"";
++        j += ",\"alarm\":";
++        j += (state_is(State::Alarm) || state_is(State::ConfigAlarm)) ? "true" : "false";
++        j += ",\"repeat\":";
++        j += (s_state == PState::Idle ? repeat : s_repeat) ? "true" : "false";
++        j += ",\"current\":\"";
++        if (s_state != PState::Idle && s_state != PState::Ending && s_state != PState::GoingHome && s_idx < s_seq.size()) {
++            j += json_escape(s_seq[s_idx]);
++        }
++        j += "\",\"position\":" + std::to_string(s_idx + 1) + ",\"total\":" + std::to_string(s_seq.size());
++        j += ",\"files\":[";
++        for (size_t i = 0; i < list.size(); i++) {
++            if (i) {
++                j += ",";
++            }
++            j += "{\"n\":\"" + json_escape(list[i].name) + "\",\"c\":" + (list[i].checked ? "1" : "0") + ",\"s\":" +
++                 std::to_string((unsigned long)list[i].size) + "}";
++        }
++        j += "]}";
++        return j;
++    }
++
++    // -------------------------------------------------------------- helpers
++
++    bool machine_alarm() {
++        return state_is(State::Alarm) || state_is(State::ConfigAlarm) || state_is(State::Critical);
++    }
++
++    void go_idle(const char* message) {
++        s_state          = PState::Idle;
++        s_held           = false;
++        s_resume_pending = false;
++        s_message        = message;
++    }
++
++    void launch_current() {
++        s_abort0 = Job::abort_count();
++        launch_macro("$LocalFS/Run=/" + s_seq[s_idx]);
++        s_state = PState::Launching;
++    }
++
++    // ------------------------------------------------------------- commands
++
++    // $Playlist/Status
++    Error cmd_status(const char*, AuthenticationLevel, Channel& out) {
++        log_stream(out, "[PLAYLIST:" << status_json());
++        return Error::Ok;
++    }
++
++    // $Playlist/Save=<repeat 0|1>~<flag><name>~<flag><name>...   flag is 1 (checked) or 0
++    Error cmd_save(const char* param, AuthenticationLevel, Channel& out) {
++        std::string        s(param ? param : "");
++        std::vector<Entry> list;
++        bool               repeat = false;
++        size_t             pos    = 0;
++        bool               first  = true;
++        while (pos <= s.size()) {
++            size_t      end = s.find('~', pos);
++            std::string tok = s.substr(pos, end == std::string::npos ? std::string::npos : end - pos);
++            if (first) {
++                repeat = !tok.empty() && tok[0] == '1';
++                first  = false;
++            } else if (tok.size() > 1) {
++                Entry e;
++                e.checked = tok[0] == '1';
++                e.name    = tok.substr(1);
++                if (is_gcode_name(e.name)) {
++                    list.push_back(e);
++                }
++            }
++            if (end == std::string::npos) {
++                break;
++            }
++            pos = end + 1;
++        }
++        save_cfg(list, repeat);
++        if (s_state != PState::Idle) {
++            s_repeat = repeat;  // repeat can be toggled while running
++        }
++        return Error::Ok;
++    }
++
++    // $Playlist/Start
++    Error cmd_start(const char*, AuthenticationLevel, Channel& out) {
++        if (s_state != PState::Idle) {
++            return Error::Ok;  // already running; ignore double clicks
++        }
++        if (machine_alarm()) {
++            s_message = "The machine is locked. Press Unlock first.";
++            return Error::Ok;
++        }
++        if (!state_is(State::Idle)) {
++            s_message = "The machine is busy. Try again in a moment.";
++            return Error::Ok;
++        }
++        bool repeat;
++        auto list = merged_list(repeat);
++        s_seq.clear();
++        for (auto& e : list) {
++            if (e.checked) {
++                s_seq.push_back(e.name);
++            }
++        }
++        if (s_seq.empty()) {
++            s_message = "Tick at least one file first.";
++            return Error::Ok;
++        }
++        s_repeat  = repeat;
++        s_idx     = 0;
++        s_held    = false;
++        s_message = "";
++        launch_current();
++        return Error::Ok;
++    }
++
++    // $Playlist/Pause
++    Error cmd_pause(const char*, AuthenticationLevel, Channel& out) {
++        if (s_state == PState::Idle || s_state == PState::Ending || s_state == PState::GoingHome) {
++            return Error::Ok;
++        }
++        s_held = true;
++        if (state_is(State::Cycle)) {
++            protocol_send_event(&feedHoldEvent);
++        }
++        return Error::Ok;
++    }
++
++    // $Playlist/Resume
++    Error cmd_resume(const char*, AuthenticationLevel, Channel& out) {
++        if (!s_held) {
++            return Error::Ok;
++        }
++        s_held = false;
++        if (state_is(State::Hold)) {
++            s_resume_pending = true;  // sent from poll() once the hold has finished decelerating
++        }
++        return Error::Ok;
++    }
++
++    // $Playlist/End : stop now, then go to the home position
++    Error cmd_end(const char*, AuthenticationLevel, Channel& out) {
++        if (s_state == PState::Idle) {
++            // Nothing running from the playlist, but still honour the button:
++            // stop whatever the machine is doing and go home.
++            s_seq.clear();
++        }
++        if (s_state == PState::Ending || s_state == PState::GoingHome) {
++            return Error::Ok;
++        }
++        s_state          = PState::Ending;
++        s_end_stage      = 0;
++        s_held           = false;
++        s_resume_pending = false;
++        s_message        = "";
++        s_stage_time     = now();
++        return Error::Ok;
++    }
++
++    // ------------------------------------------------------------ the module
++
++    class PlaylistModule : public Module {
++    public:
++        explicit PlaylistModule(const char* name) : Module(name) {}
++
++        void init() override {
++            new ReportCommand("PLQ", "Playlist/Status", cmd_status, anyState, WG);
++            new ReportCommand("PLS", "Playlist/Save", cmd_save, anyState, WG);
++            new ReportCommand("PLG", "Playlist/Start", cmd_start, anyState, WG);
++            new ReportCommand("PLP", "Playlist/Pause", cmd_pause, anyState, WG);
++            new ReportCommand("PLR", "Playlist/Resume", cmd_resume, anyState, WG);
++            new ReportCommand("PLE", "Playlist/End", cmd_end, anyState, WG);
++            log_info("Playlist ready");
++        }
++
++        void poll() override {
++            // Resume after a user pause, once the hold has finished
++            if (s_resume_pending) {
++                if (state_is(State::Hold)) {
++                    if (sys.suspend().bit.holdComplete) {
++                        protocol_send_event(&cycleStartEvent);
++                        s_resume_pending = false;
++                    }
++                } else {
++                    s_resume_pending = false;
++                }
++            }
++
++            switch (s_state) {
++                case PState::Idle:
++                    return;
++
++                case PState::Launching:
++                    if (!s_launch_done) {
++                        return;
++                    }
++                    if (!s_launch_ok) {
++                        go_idle("Could not start the file. Is the machine busy?");
++                        return;
++                    }
++                    s_state = PState::Running;
++                    return;
++
++                case PState::Running:
++                    if (machine_alarm()) {
++                        go_idle("The machine stopped (alarm). Press Unlock, then Start.");
++                        return;
++                    }
++                    if (Job::active()) {
++                        return;
++                    }
++                    if (Job::abort_count() != s_abort0) {
++                        go_idle("Stopped because of an error in the file.");
++                        return;
++                    }
++                    // File finished; wait for the last move to complete
++                    if (!state_is(State::Idle)) {
++                        return;
++                    }
++                    s_idx++;
++                    if (s_idx >= s_seq.size()) {
++                        if (s_repeat) {
++                            s_idx = 0;
++                        } else {
++                            go_idle("Finished.");
++                            return;
++                        }
++                    }
++                    s_state = PState::Between;
++                    return;
++
++                case PState::Between:
++                    if (machine_alarm()) {
++                        go_idle("The machine stopped (alarm). Press Unlock, then Start.");
++                        return;
++                    }
++                    if (s_held || !state_is(State::Idle)) {
++                        return;
++                    }
++                    launch_current();
++                    return;
++
++                case PState::Ending:
++                    poll_end();
++                    return;
++
++                case PState::GoingHome:
++                    // Give the homing / move event time to be picked up
++                    if (!older_than(s_stage_time, 500)) {
++                        return;
++                    }
++                    if (machine_alarm()) {
++                        go_idle("Could not reach the home position (alarm).");
++                        return;
++                    }
++                    if (s_launch_done && !Job::active() && state_is(State::Idle)) {
++                        go_idle("Stopped. Machine is at home.");
++                    } else if (older_than(s_stage_time, 120000)) {
++                        go_idle("Going home took too long.");
++                    }
++                    return;
++            }
++        }
++
++    private:
++        void poll_end() {
++            switch (s_end_stage) {
++                case 0:  // bring the motion to a controlled stop
++                    if (state_is(State::Cycle)) {
++                        protocol_send_event(&feedHoldEvent);
++                        s_end_stage = 1;
++                    } else if (state_is(State::Hold)) {
++                        s_end_stage = 1;
++                    } else {
++                        s_end_stage = 2;  // nothing moving
++                    }
++                    s_stage_time = now();
++                    return;
++                case 1:  // wait for the hold to complete, so position is kept
++                    if ((state_is(State::Hold) && sys.suspend().bit.holdComplete) || older_than(s_stage_time, 15000) ||
++                        state_is(State::Idle)) {
++                        s_end_stage = 2;
++                        s_stage_time = now();
++                    }
++                    return;
++                case 2:  // reset: drops the running file(s); after a completed hold this keeps position
++                    if (Job::active() || state_is(State::Hold)) {
++                        protocol_send_event(&rtResetEvent);
++                    }
++                    s_end_stage  = 3;
++                    s_stage_time = now();
++                    return;
++                case 3:  // wait for the machine to settle
++                    if (!older_than(s_stage_time, 300)) {
++                        return;
++                    }
++                    if (machine_alarm()) {
++                        go_idle("Stopped, but the machine raised an alarm. Press Unlock.");
++                        return;
++                    }
++                    if (!Job::active() && state_is(State::Idle)) {
++                        s_end_stage = 4;
++                    } else if (older_than(s_stage_time, 8000)) {
++                        go_idle("Could not stop cleanly. Press Unlock.");
++                    }
++                    return;
++                case 4:  // go home: use the homing cycle if one is configured, otherwise machine 0,0
++                    s_state      = PState::GoingHome;
++                    s_stage_time = now();
++                    if (Machine::Axes::homingMask) {
++                        s_launch_done = true;
++                        protocol_send_event(&homingButtonEvent);
++                    } else {
++                        launch_macro("G90&G53 G0 X0 Y0");
++                    }
++                    return;
++            }
++        }
++    };
++
++    ModuleFactory::InstanceBuilder<PlaylistModule> __attribute__((init_priority(112))) playlist_module("playlist", true);
++}  // namespace
+diff --git a/FluidNC/src/WebUI/UiDir.cpp b/FluidNC/src/WebUI/UiDir.cpp
+index 46b325c..09d9169 100644
+--- a/FluidNC/src/WebUI/UiDir.cpp
++++ b/FluidNC/src/WebUI/UiDir.cpp
+@@ -28,9 +28,9 @@ namespace WebUI {
+     void UiDir::init() {
+         // A directory, on any filesystem, whose subdirectories each hold a
+         // WebUI, served at /ui/<subdirectory>/ - e.g. builds too big for FLASH
+-        http_ui_dir = new StringSetting("HTTP WebUI directory", WEBSET, WA, NULL, "HTTP/UIDir", "/sd/ui", 0, 0);
++        http_ui_dir = new StringSetting("HTTP WebUI directory", WEBSET, WA, NULL, "HTTP/UIDir", "/ui", 0, 0);
+         // The subdirectory of HTTP/UIDir that / redirects to, if it exists
+-        http_default_ui = new StringSetting("HTTP default WebUI", WEBSET, WA, NULL, "HTTP/DefaultUI", "", 0, 0);
++        http_default_ui = new StringSetting("HTTP default WebUI", WEBSET, WA, NULL, "HTTP/DefaultUI", "kiosk", 0, 0);
+     }
+ 
+     // Canonical form of HTTP/UIDir, or empty if it is not set.  Looked up
+diff --git a/FluidNC/src/WebUI/WebUIServer.cpp b/FluidNC/src/WebUI/WebUIServer.cpp
+index b71d388..b51deac 100644
+--- a/FluidNC/src/WebUI/WebUIServer.cpp
++++ b/FluidNC/src/WebUI/WebUIServer.cpp
+@@ -862,6 +862,12 @@ namespace WebUI {
+     bool WebUI_Server::isAllowedInMotion(String cmd) {
+         if (cmd.startsWith("[ESP800]"))
+             return true;
++        // Kiosk page: status and the three buttons must work while the machine moves
++        String up = cmd;
++        up.toUpperCase();
++        if (up.startsWith("$PLAYLIST/STATUS") || up.startsWith("$PLAYLIST/PAUSE") || up.startsWith("$PLAYLIST/RESUME") ||
++            up.startsWith("$PLAYLIST/END"))
++            return true;
+ 
+         return false;
+     }
+@@ -884,7 +890,8 @@ namespace WebUI {
+             return;
+         }
+         if (request->hasParam("plain")) {
+-            synchronousCommand(request, request->getParam("plain")->value().c_str(), silent, auth_level);
++            String plain = request->getParam("plain")->value();
++            synchronousCommand(request, plain.c_str(), silent, auth_level, isAllowedInMotion(plain));
+             return;
+         }
+         request->send(500, "text/plain", "Invalid command");
+diff --git a/platformio.ini b/platformio.ini
+index f18dc99..4b0a4f4 100644
+--- a/platformio.ini
++++ b/platformio.ini
+@@ -333,6 +333,17 @@ build_flags =
+ # RP2040 (Raspberry Pi Pico) Configuration
+ # ==========================================
+ 
++; wifi_s3_octalPSRAM for boards with 16 MB flash (e.g. ESP32-S3 N16R8): same
++; firmware, but the partition table gives LocalFS ~9.9 MB instead of ~1 MB.
++; The filesystem starts at the same 0x610000 offset as the 8 MB layout.
++; After the first USB flash, upload config.yaml again (the filesystem is rebuilt).
++[env:wifi_s3_octalPSRAM_16mb]
++extends = env:wifi_s3_octalPSRAM
++board_build.partitions = FluidNC/ld/esp32s3/app3M_spiffs9M_16MB.csv
++board_upload.flash_size = 16MB
++board_upload.maximum_size = 16777216
++board_build.flash_size = 16MB
++
+ [common_pico_base]
+ platform = https://github.com/maxgerhardt/platform-raspberrypi.git
+ framework = arduino

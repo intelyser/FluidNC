@@ -165,6 +165,10 @@ public:
     // #1861). Returns true if it aborted a job.
     static bool consume_unwind_cause();
 
+    // Number of times a running job has been killed (abort or unwind) since boot.
+    // Lets a supervisor tell "file finished" from "file was stopped by an error/reset".
+    static uint32_t abort_count();
+
     static bool get_param(const std::string& name, float& value);
     static bool set_param(const std::string& name, float value);
     static bool param_exists(const std::string& name);
