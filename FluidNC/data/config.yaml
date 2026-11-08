@@ -1,7 +1,7 @@
 name: ESP32 S3 Pair CNC Shield V3
 board: ESP32 S3 Pair CNC Shield V3
 kinematics:
-  CoreXY: {}
+  CoreXY:
 stepping:
   engine: RMT
   idle_ms: 250
@@ -15,12 +15,22 @@ axes:
     max_rate_mm_per_min: 2000
     acceleration_mm_per_sec2: 25
     max_travel_mm: 470
-    #homing:
-    #  cycle: 2
-    #  mpos_mm: 10
-    #  positive_direction: false
+    soft_limits: true
+
+    homing:
+      cycle: 1
+      feed_mm_per_min: 200.000
+      seek_mm_per_min: 1500.000
+      settle_ms: 250
+      seek_scaler: 1.100
+      feed_scaler: 1.100
+      positive_direction: false
+      mpos_mm: 0.000 
+      
+
     motor0:
-      #limit_all_pin: gpio.17:pu:low
+      limit_neg_pin: gpio.4:low:pu
+      limit_pos_pin: NO_PIN
       stepstick:
         direction_pin: gpio.14:low
         step_pin: gpio.12
@@ -28,34 +38,29 @@ axes:
         ms1_pin: NO_PIN
         ms2_pin: NO_PIN
         ms3_pin: NO_PIN
-      limit_neg_pin: NO_PIN
-      limit_pos_pin: NO_PIN
-    motor1:
-      limit_neg_pin: NO_PIN
-      limit_pos_pin: NO_PIN
-      limit_all_pin: NO_PIN
+
   y:
     steps_per_mm: 40
     max_rate_mm_per_min: 2000
     acceleration_mm_per_sec2: 25
     max_travel_mm: 885
-    #homing:
-    #  cycle: 2
-    #  mpos_mm: 10
-    #  positive_direction: false
+    soft_limits: true
+
+    homing:
+      cycle: 2
+      feed_mm_per_min: 200.000
+      seek_mm_per_min: 1500.000
+      settle_ms: 250
+      positive_direction: false
+      mpos_mm: 0.000
+
     motor0:
-    #  limit_all_pin: gpio.4:pu:low
+      limit_neg_pin: gpio.5:low:pu
+      limit_pos_pin: NO_PIN
       stepstick:
         direction_pin: gpio.11:low
         step_pin: gpio.21
         disable_pin: NO_PIN
         ms1_pin: NO_PIN
         ms2_pin: NO_PIN
-        ms3_pin: NO_PIN
-      limit_neg_pin: NO_PIN
-      limit_pos_pin: NO_PIN
-    motor1:
-      limit_neg_pin: NO_PIN
-      limit_pos_pin: NO_PIN
-      limit_all_pin: NO_PIN
-
+        ms3_pin: NO_PIN      
