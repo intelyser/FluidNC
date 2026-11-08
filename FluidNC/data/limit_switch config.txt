@@ -30,8 +30,19 @@ axes:
 
     motor0:
       limit_neg_pin: gpio.34:low:pu  # Map to your ESP32-S3 pin. ':low' means NC switch. ':pu' enables internal pullup resistor.
-      # (Add your TMC2209 driver block here without StallGuard settings)
+      limit_pos_pin: NO_PIN
+      stepstick:
+        direction_pin: gpio.14:low
+        step_pin: gpio.12
+        disable_pin: NO_PIN
+        ms1_pin: NO_PIN
+        ms2_pin: NO_PIN
+        ms3_pin: NO_PIN
 
+    motor1:
+      limit_neg_pin: NO_PIN
+      limit_pos_pin: NO_PIN
+      limit_all_pin: NO_PIN
   y:
     steps_per_mm: 80.000
     max_rate_mm_per_min: 6000.000

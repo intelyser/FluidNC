@@ -307,8 +307,56 @@ namespace WebUI {
 #    endif
         }
 
+        // Register the event logging once.  Called before the first connection attempt so
+        // the whole association handshake (start, connected, got IP, disconnect reasons)
+        // is visible with millisecond timestamps, not just what happens after success.
+        void registerEvents() {
+            static bool eventsRegistered = false;
+            if (eventsRegistered) {
+                return;
+            }
+            eventsRegistered = true;
+            WiFi.onEvent(wifiEventHandler);
+            WiFi.onEvent([](arduino_event_id_t event, arduino_event_info_t info) {
+                switch (event) {
+                    case ARDUINO_EVENT_WIFI_STA_START:
+                        log_info_to(Console, "t=" << millis() << " STA: started");
+                        break;
+                    case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+                        log_info_to(Console,
+                                    "t=" << millis() << " STA: associated, channel " << (int)info.wifi_sta_connected.channel << " auth "
+                                         << (int)info.wifi_sta_connected.authmode);
+                        break;
+                    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+                        log_info_to(Console, "t=" << millis() << " STA: got IP, rssi " << (int)WiFi.RSSI());
+                        break;
+                    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+                        log_info_to(Console, "t=" << millis() << " STA: disconnected, reason " << (int)info.wifi_sta_disconnected.reason);
+                        break;
+                    case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
+                        log_info_to(Console, "AP: station joined " << mac2str(info.wifi_ap_staconnected.mac));
+                        break;
+                    case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
+#    if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 1, 0)
+                        log_info_to(Console,
+                                    "AP: station left " << mac2str(info.wifi_ap_stadisconnected.mac) << " reason "
+                                                        << (int)info.wifi_ap_stadisconnected.reason);
+#    else
+                        log_info_to(Console, "AP: station left " << mac2str(info.wifi_ap_stadisconnected.mac));
+#    endif
+                        break;
+                    case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED:
+                        log_info_to(Console, "AP: station got an IP address");
+                        break;
+                    default:
+                        break;
+                }
+            });
+        }
+
         void prepareStartSta(int staMinSecurity, bool fastScan, const char* apCountry) override {
             (void)apCountry;
+            registerEvents();
             WiFi.enableAP(false);
             WiFi.setSleep(false);  // no modem sleep while associating
             WiFi.setMinSecurity(static_cast<wifi_auth_mode_t>(staMinSecurity));
@@ -334,6 +382,7 @@ namespace WebUI {
         }
 
         void prepareStartAp(const char* apCountry) override {
+            registerEvents();
             WiFi.enableSTA(false);
             if (apCountry && ESP_OK != esp_wifi_set_country_code(apCountry, true)) {
                 log_error("failed to set Wifi regulatory domain to " << apCountry);
@@ -343,36 +392,7 @@ namespace WebUI {
         void onStaFallbackFailure() override { esp_wifi_restore(); }
 
         void onWifiOn(int wifiPsMode) override {
-            static bool eventsRegistered = false;
-            if (!eventsRegistered) {
-                WiFi.onEvent(wifiEventHandler);
-                // Diagnostics: report who joins/leaves the AP and why, and why a STA link drops
-                WiFi.onEvent([](arduino_event_id_t event, arduino_event_info_t info) {
-                    switch (event) {
-                        case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
-                            log_info_to(Console, "AP: station joined " << mac2str(info.wifi_ap_staconnected.mac));
-                            break;
-                        case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
-#    if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 1, 0)
-                            log_info_to(Console,
-                                        "AP: station left " << mac2str(info.wifi_ap_stadisconnected.mac)
-                                                            << " reason " << (int)info.wifi_ap_stadisconnected.reason);
-#    else
-                            log_info_to(Console, "AP: station left " << mac2str(info.wifi_ap_stadisconnected.mac));
-#    endif
-                            break;
-                        case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED:
-                            log_info_to(Console, "AP: station got an IP address");
-                            break;
-                        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-                            log_info_to(Console, "STA: disconnected, reason " << (int)info.wifi_sta_disconnected.reason);
-                            break;
-                        default:
-                            break;
-                    }
-                });
-                eventsRegistered = true;
-            }
+            registerEvents();
             // Go through the Arduino layer so its own "sleep enabled" flag follows the
             // setting; otherwise the core re-applies modem sleep on later WiFi events.
             WiFi.setSleep(static_cast<wifi_ps_type_t>(wifiPsMode));

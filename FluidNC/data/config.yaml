@@ -29,8 +29,9 @@ axes:
       
 
     motor0:
-      limit_neg_pin: gpio.4:low:pu
+      limit_neg_pin: gpio.4:pu
       limit_pos_pin: NO_PIN
+      pulloff_mm: 3.000
       stepstick:
         direction_pin: gpio.14:low
         step_pin: gpio.12
@@ -55,8 +56,9 @@ axes:
       mpos_mm: 0.000
 
     motor0:
-      limit_neg_pin: gpio.5:low:pu
+      limit_neg_pin: gpio.5:pu
       limit_pos_pin: NO_PIN
+      pulloff_mm: 3.000
       stepstick:
         direction_pin: gpio.11:low
         step_pin: gpio.21

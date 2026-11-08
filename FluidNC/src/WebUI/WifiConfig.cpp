@@ -433,6 +433,12 @@ namespace WebUI {
                 auto ret = WiFi.status();
                 switch (ret) {
                     case WL_NO_SSID_AVAIL:
+                        // One missed scan is common right after boot; the WiFi stack keeps
+                        // retrying by itself, so only give up near the end of the wait.
+                        if (i < (max_attempts - 3)) {
+                            log_info("SSID not seen yet, retrying");
+                            break;
+                        }
                         log_info("No SSID");
                         return false;
                     case WL_CONNECT_FAILED:
@@ -572,6 +578,25 @@ namespace WebUI {
                 log_info("Starting client failed");
                 return false;
             }
+        }
+
+        // A join that fails at boot often succeeds on a clean second try, so restart the
+        // whole STA bring-up a few times before giving up (or falling back to AP).
+        static bool StartSTAWithRetries() {
+            const int rounds = 4;
+            for (int round = 1; round <= rounds; ++round) {
+                if (StartSTA()) {
+                    return true;
+                }
+                if (strlen(_sta_ssid->get()) == 0 || round == rounds) {
+                    break;
+                }
+                log_info("STA join failed, restarting WiFi (attempt " << (round + 1) << " of " << rounds << ")");
+                WiFi.disconnect(true);
+                WiFi.mode(WIFI_OFF);
+                delay_ms(1000);
+            }
+            return false;
         }
 
         static bool StartAP() {
@@ -731,12 +756,12 @@ namespace WebUI {
                     log_info("WiFi is disabled");
                     return;
                 case WiFiSTA:
-                    if (StartSTA()) {
+                    if (StartSTAWithRetries()) {
                         goto wifi_on;
                     }
                     goto wifi_off;
                 case WiFiFallback:
-                    if (StartSTA()) {
+                    if (StartSTAWithRetries()) {
                         goto wifi_on;
                     } else {  // STA failed, reset
                         WiFi.mode(WIFI_OFF);
