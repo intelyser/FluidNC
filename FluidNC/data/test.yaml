@@ -1,0 +1,61 @@
+name: ESP32 S3 Pair CNC Shield V3
+board: ESP32 S3 Pair CNC Shield V3
+kinematics:
+  CoreXY: {}
+stepping:
+  engine: RMT
+  idle_ms: 250
+  dir_delay_us: 1
+  pulse_us: 2
+  disable_delay_us: 0
+axes:
+  shared_stepper_disable_pin: gpio.13
+  x:
+    steps_per_mm: 80
+    max_rate_mm_per_min: 2000
+    acceleration_mm_per_sec2: 25
+    max_travel_mm: 1000
+    #homing:
+    #  cycle: 2
+    #  mpos_mm: 10
+    #  positive_direction: false
+    motor0:
+      #limit_all_pin: gpio.17:pu:low
+      stepstick:
+        direction_pin: gpio.14
+        step_pin: gpio.12
+        disable_pin: NO_PIN
+        ms1_pin: NO_PIN
+        ms2_pin: NO_PIN
+        ms3_pin: NO_PIN
+      limit_neg_pin: NO_PIN
+      limit_pos_pin: NO_PIN
+    motor1:
+      limit_neg_pin: NO_PIN
+      limit_pos_pin: NO_PIN
+      limit_all_pin: NO_PIN
+  y:
+    steps_per_mm: 80
+    max_rate_mm_per_min: 2000
+    acceleration_mm_per_sec2: 25
+    max_travel_mm: 500
+    #homing:
+      #cycle: 2
+      #mpos_mm: 10
+      #positive_direction: false
+    motor0:
+      #limit_all_pin: gpio.4:pu:low
+      stepstick:
+        direction_pin: gpio.11
+        step_pin: gpio.21
+        disable_pin: NO_PIN
+        ms1_pin: NO_PIN
+        ms2_pin: NO_PIN
+        ms3_pin: NO_PIN
+      limit_neg_pin: NO_PIN
+      limit_pos_pin: NO_PIN
+    motor1:
+      limit_neg_pin: NO_PIN
+      limit_pos_pin: NO_PIN
+      limit_all_pin: NO_PIN
+

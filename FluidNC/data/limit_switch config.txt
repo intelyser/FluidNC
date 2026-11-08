@@ -1,0 +1,60 @@
+yaml
+# 1. Tell FluidNC this is a CoreXY machine
+kinematics:
+  CoreXY:
+
+axes:
+  x:
+    steps_per_mm: 80.000
+    max_rate_mm_per_min: 6000.000
+    acceleration_mm_per_sec2: 500.000
+    must_home: true
+    max_travel_mm: 300.000
+    soft_limits: true             # Soft limits will now work perfectly
+
+    homing:
+      cycle: 1                    # Home X first
+      allow_swapped_motors: true  # Critical for CoreXY setup
+      feed_mm_per_min: 200.000    # Slow slow touch-off speed
+      seek_mm_per_min: 1500.000   # Faster initial search speed
+      settle_ms: 250
+      seek_scaler: 1.100
+      feed_scaler: 1.100
+
+      # Direction logic:
+      # If switch is at minimum (left), set positive_direction: false and mpos_mm: 0.000
+      # If switch is at maximum (right), set positive_direction: true and mpos_mm: 300.000
+      positive_direction: false
+      mpos_mm: 0.000 
+      pulloff_mm: 3.000           # Distance to back away from switch after homing
+
+    motor0:
+      limit_neg_pin: gpio.34:low:pu  # Map to your ESP32-S3 pin. ':low' means NC switch. ':pu' enables internal pullup resistor.
+      # (Add your TMC2209 driver block here without StallGuard settings)
+
+  y:
+    steps_per_mm: 80.000
+    max_rate_mm_per_min: 6000.000
+    acceleration_mm_per_sec2: 500.000
+    must_home: true
+    max_travel_mm: 300.000
+    soft_limits: true
+
+    homing:
+      cycle: 2                    # Home Y second (after X finishes)
+      allow_swapped_motors: true
+      feed_mm_per_min: 200.000
+      seek_mm_per_min: 1500.000
+      settle_ms: 250
+      seek_scaler: 1.100
+      feed_scaler: 1.100
+      
+      # Direction logic:
+      # If switch is at front (min), set positive_direction: false and mpos_mm: 0.000
+      # If switch is at back (max), set positive_direction: true and mpos_mm: 300.000
+      positive_direction: false
+      mpos_mm: 0.000
+      pulloff_mm: 3.000
+
+    motor0:
+      limit_neg_pin: gpio.35:low:pu  # Map to your Y-Limit ESP32-S3 pin.
