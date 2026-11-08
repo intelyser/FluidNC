@@ -310,6 +310,7 @@ namespace WebUI {
         void prepareStartSta(int staMinSecurity, bool fastScan, const char* apCountry) override {
             (void)apCountry;
             WiFi.enableAP(false);
+            WiFi.setSleep(false);  // no modem sleep while associating
             WiFi.setMinSecurity(static_cast<wifi_auth_mode_t>(staMinSecurity));
             WiFi.setScanMethod(fastScan ? WIFI_FAST_SCAN : WIFI_ALL_CHANNEL_SCAN);
             WiFi.setAutoReconnect(true);
@@ -345,9 +346,36 @@ namespace WebUI {
             static bool eventsRegistered = false;
             if (!eventsRegistered) {
                 WiFi.onEvent(wifiEventHandler);
+                // Diagnostics: report who joins/leaves the AP and why, and why a STA link drops
+                WiFi.onEvent([](arduino_event_id_t event, arduino_event_info_t info) {
+                    switch (event) {
+                        case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
+                            log_info_to(Console, "AP: station joined " << mac2str(info.wifi_ap_staconnected.mac));
+                            break;
+                        case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
+#    if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 1, 0)
+                            log_info_to(Console,
+                                        "AP: station left " << mac2str(info.wifi_ap_stadisconnected.mac)
+                                                            << " reason " << (int)info.wifi_ap_stadisconnected.reason);
+#    else
+                            log_info_to(Console, "AP: station left " << mac2str(info.wifi_ap_stadisconnected.mac));
+#    endif
+                            break;
+                        case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED:
+                            log_info_to(Console, "AP: station got an IP address");
+                            break;
+                        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+                            log_info_to(Console, "STA: disconnected, reason " << (int)info.wifi_sta_disconnected.reason);
+                            break;
+                        default:
+                            break;
+                    }
+                });
                 eventsRegistered = true;
             }
-            esp_wifi_set_ps(WIFI_PS_NONE);
+            // Go through the Arduino layer so its own "sleep enabled" flag follows the
+            // setting; otherwise the core re-applies modem sleep on later WiFi events.
+            WiFi.setSleep(static_cast<wifi_ps_type_t>(wifiPsMode));
             esp_wifi_set_ps(static_cast<wifi_ps_type_t>(wifiPsMode));
         }
 

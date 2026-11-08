@@ -1,0 +1,30 @@
+diff --git a/FluidNC/src/Playlist.cpp b/FluidNC/src/Playlist.cpp
+index 81cdc87..b076f52 100644
+--- a/FluidNC/src/Playlist.cpp
++++ b/FluidNC/src/Playlist.cpp
+@@ -357,6 +357,7 @@ namespace {
+             return Error::Ok;
+         }
+         s_held = true;
++        log_info("Playlist: pause requested, machine state " << (int)sys.state());
+         if (state_is(State::Cycle)) {
+             protocol_send_event(&feedHoldEvent);
+         }
+@@ -542,15 +543,10 @@ namespace {
+                         go_idle("Could not stop cleanly. Press Unlock.");
+                     }
+                     return;
+-                case 4:  // go home: use the homing cycle if one is configured, otherwise machine 0,0
++                case 4:  // go to the home position: machine zero (no homing cycle, so no limit switches are needed)
+                     s_state      = PState::GoingHome;
+                     s_stage_time = now();
+-                    if (Machine::Axes::homingMask) {
+-                        s_launch_done = true;
+-                        protocol_send_event(&homingButtonEvent);
+-                    } else {
+-                        launch_macro("G90&G53 G0 X0 Y0");
+-                    }
++                    launch_macro("G90&G53 G0 X0 Y0");
+                     return;
+             }
+         }

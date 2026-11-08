@@ -1,0 +1,23 @@
+diff --git a/FluidNC/esp32/WifiImpl.cpp b/FluidNC/esp32/WifiImpl.cpp
+index d71a1f8..901655b 100644
+--- a/FluidNC/esp32/WifiImpl.cpp
++++ b/FluidNC/esp32/WifiImpl.cpp
+@@ -310,6 +310,7 @@ namespace WebUI {
+         void prepareStartSta(int staMinSecurity, bool fastScan, const char* apCountry) override {
+             (void)apCountry;
+             WiFi.enableAP(false);
++            WiFi.setSleep(false);  // no modem sleep while associating
+             WiFi.setMinSecurity(static_cast<wifi_auth_mode_t>(staMinSecurity));
+             WiFi.setScanMethod(fastScan ? WIFI_FAST_SCAN : WIFI_ALL_CHANNEL_SCAN);
+             WiFi.setAutoReconnect(true);
+@@ -372,7 +373,9 @@ namespace WebUI {
+                 });
+                 eventsRegistered = true;
+             }
+-            esp_wifi_set_ps(WIFI_PS_NONE);
++            // Go through the Arduino layer so its own "sleep enabled" flag follows the
++            // setting; otherwise the core re-applies modem sleep on later WiFi events.
++            WiFi.setSleep(static_cast<wifi_ps_type_t>(wifiPsMode));
+             esp_wifi_set_ps(static_cast<wifi_ps_type_t>(wifiPsMode));
+         }
+ 
