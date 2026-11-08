@@ -20,6 +20,7 @@
 #include "Logging.h"
 #include "FluidPath.h"
 #include "Machine/Axes.h"
+#include "Machine/Homing.h"
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -43,6 +44,9 @@ namespace {
     // -------------------------------------------------------------- globals
 
     const char* const CFG_FILE = "/playlist.cfg";
+    // End parks the carriage this far (mm, machine coordinates) from the home switches.
+    // Keep it larger than each axis' pulloff_mm so the switches are never pressed.
+    const char* const PARK_MM = "5";
     const char* const GCODE_DIR = "/gcode";  // user G-code files live here, not in the LocalFS root
 
     Macro    s_macro { "Playlist" };  // runs "$LocalFS/Run=..." or the go-home move
@@ -50,6 +54,16 @@ namespace {
     volatile bool s_launch_ok   = false;
 
     PState                   s_state = PState::Idle;
+
+    // Homing at power-up and on request.  The machine homes itself shortly after boot;
+    // only if that fails does the page ask the operator what to do.
+    enum class HState { None, Requested, Running };
+    HState   s_hstate         = HState::None;
+    TickType_t s_h_t0         = 0;
+    bool     s_home_auto_done = false;
+    bool     s_home_failed    = false;
+    const uint32_t BOOT_HOME_DELAY_MS = 4000;  // let WiFi and the rest finish starting first
+
     std::vector<std::string> s_seq;  // names captured at Start
     size_t                   s_idx = 0;
     bool                     s_repeat = false;
@@ -239,6 +253,11 @@ namespace {
         j += "\",\"message\":\"" + json_escape(s_message) + "\"";
         j += ",\"alarm\":";
         j += (state_is(State::Alarm) || state_is(State::ConfigAlarm)) ? "true" : "false";
+        j += ",\"homing\":";
+        bool auto_pending = !s_home_auto_done && !s_home_failed && Machine::Homing::unhomed_axes() && state_is(State::Alarm);
+        j += (state_is(State::Homing) || s_hstate != HState::None || auto_pending) ? "true" : "false";
+        j += ",\"homefail\":";
+        j += s_home_failed ? "true" : "false";
         j += ",\"repeat\":";
         j += (s_state == PState::Idle ? repeat : s_repeat) ? "true" : "false";
         j += ",\"current\":\"";
@@ -269,6 +288,48 @@ namespace {
         s_held           = false;
         s_resume_pending = false;
         s_message        = message;
+    }
+
+    void request_homing(const char* message) {
+        s_home_failed = false;
+        s_message     = message;
+        s_hstate      = HState::Requested;
+        s_h_t0        = now();
+        protocol_send_event(&homingButtonEvent);
+    }
+
+    // Called from poll(): follow a homing request through to success or failure.
+    void homing_step() {
+        switch (s_hstate) {
+            case HState::None:
+                // Power-up: home once, automatically, when the machine is waiting for it.
+                if (!s_home_auto_done && s_state == PState::Idle && older_than(0, BOOT_HOME_DELAY_MS) && state_is(State::Alarm) &&
+                    Machine::Homing::unhomed_axes()) {
+                    s_home_auto_done = true;
+                    request_homing("Finding the home position…");
+                }
+                break;
+            case HState::Requested:
+                if (state_is(State::Homing)) {
+                    s_hstate = HState::Running;
+                } else if (older_than(s_h_t0, 5000)) {
+                    s_hstate      = HState::None;
+                    s_home_failed = true;
+                    s_message     = "Homing did not start.";
+                }
+                break;
+            case HState::Running:
+                if (!state_is(State::Homing)) {
+                    s_hstate = HState::None;
+                    if (state_is(State::Idle) && !Machine::Homing::unhomed_axes()) {
+                        s_message = "Home position found.";
+                    } else {
+                        s_home_failed = true;
+                        s_message     = "Homing failed. Check that nothing blocks the machine and the switches work.";
+                    }
+                }
+                break;
+        }
     }
 
     void launch_current() {
@@ -318,13 +379,26 @@ namespace {
         return Error::Ok;
     }
 
+    // $Playlist/Home   (try again after a failed homing)
+    Error cmd_home(const char*, AuthenticationLevel, Channel& out) {
+        if (s_state != PState::Idle || s_hstate != HState::None) {
+            return Error::Ok;
+        }
+        if (state_is(State::Cycle) || state_is(State::Hold) || state_is(State::Jog)) {
+            s_message = "The machine is busy.";
+            return Error::Ok;
+        }
+        request_homing("Finding the home position…");
+        return Error::Ok;
+    }
+
     // $Playlist/Start
     Error cmd_start(const char*, AuthenticationLevel, Channel& out) {
         if (s_state != PState::Idle) {
             return Error::Ok;  // already running; ignore double clicks
         }
         if (machine_alarm()) {
-            s_message = "The machine is locked. Press Unlock first.";
+            s_message = "The machine is locked. Press Find home first.";
             return Error::Ok;
         }
         if (!state_is(State::Idle)) {
@@ -409,10 +483,13 @@ namespace {
             new ReportCommand("PLP", "Playlist/Pause", cmd_pause, anyState, WG);
             new ReportCommand("PLR", "Playlist/Resume", cmd_resume, anyState, WG);
             new ReportCommand("PLE", "Playlist/End", cmd_end, anyState, WG);
+            new ReportCommand("PLH", "Playlist/Home", cmd_home, anyState, WG);
             log_info("Playlist ready");
         }
 
         void poll() override {
+            homing_step();
+
             // Resume after a user pause, once the hold has finished
             if (s_resume_pending) {
                 if (state_is(State::Hold)) {
@@ -442,7 +519,7 @@ namespace {
 
                 case PState::Running:
                     if (machine_alarm()) {
-                        go_idle("The machine stopped (alarm). Press Unlock, then Start.");
+                        go_idle("The machine stopped (alarm). Press Find home, then Start.");
                         return;
                     }
                     if (Job::active()) {
@@ -470,7 +547,7 @@ namespace {
 
                 case PState::Between:
                     if (machine_alarm()) {
-                        go_idle("The machine stopped (alarm). Press Unlock, then Start.");
+                        go_idle("The machine stopped (alarm). Press Find home, then Start.");
                         return;
                     }
                     if (s_held || !state_is(State::Idle)) {
@@ -534,19 +611,19 @@ namespace {
                         return;
                     }
                     if (machine_alarm()) {
-                        go_idle("Stopped, but the machine raised an alarm. Press Unlock.");
+                        go_idle("Stopped, but the machine raised an alarm. Press Find home.");
                         return;
                     }
                     if (!Job::active() && state_is(State::Idle)) {
                         s_end_stage = 4;
                     } else if (older_than(s_stage_time, 8000)) {
-                        go_idle("Could not stop cleanly. Press Unlock.");
+                        go_idle("Could not stop cleanly. Press Find home.");
                     }
                     return;
-                case 4:  // go to the home position: machine zero (no homing cycle, so no limit switches are needed)
+                case 4:  // go to the home position: parking position just off the home switches (no homing cycle)
                     s_state      = PState::GoingHome;
                     s_stage_time = now();
-                    launch_macro("G90&G53 G0 X0 Y0");
+                    launch_macro(std::string("G90&G53 G0 X") + PARK_MM + " Y" + PARK_MM);
                     return;
             }
         }

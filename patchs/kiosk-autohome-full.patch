@@ -1,0 +1,360 @@
+From a2580d75410cca0fad48261a12c2c1b3a0030676 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 8 Nov 2026 10:46:17 +0400
+Subject: [PATCH 1/2] Kiosk: Find home button; End parks 5 mm off the home
+ switches
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017as23f6rrSpig18HHFh51A
+---
+ FluidNC/data/ui/kiosk/index.html | 23 +++++++++++++++++------
+ FluidNC/src/Playlist.cpp         | 19 ++++++++++++-------
+ 2 files changed, 29 insertions(+), 13 deletions(-)
+
+diff --git a/FluidNC/data/ui/kiosk/index.html b/FluidNC/data/ui/kiosk/index.html
+index 410249b7..bf29982c 100644
+--- a/FluidNC/data/ui/kiosk/index.html
++++ b/FluidNC/data/ui/kiosk/index.html
+@@ -25,7 +25,9 @@
+   #bStart { background: var(--green); } #bPause { background: var(--amber); color: #1c2330; } #bEnd { background: var(--red); }
+   #bPause.resume { background: var(--blue); color: #fff; }
+   button:disabled { background: var(--disabled) !important; color: var(--muted) !important; cursor: not-allowed; }
+-  #unlockRow { display: none; margin-top: 12px; } #unlockRow button { background: var(--blue); padding: 14px 18px; font-size: 20px; }
++  #homeRow { margin-top: 12px; display: flex; gap: 12px; flex-wrap: wrap; }
++  #homeRow button { background: var(--blue); padding: 14px 18px; font-size: 20px; }
++  #bUnlock { background: var(--disabled) !important; color: var(--text, #fff) !important; font-size: 16px !important; }
+   h2 { margin: 0 0 4px; font-size: 20px; }
+   .hint { color: var(--muted); font-size: 16px; margin: 0 0 12px; }
+   ul { list-style: none; margin: 0; padding: 0; }
+@@ -56,7 +58,10 @@
+       <button id="bPause" class="big" disabled>Pause</button>
+       <button id="bEnd" class="big" disabled>End</button>
+     </div>
+-    <div id="unlockRow"><button id="bUnlock">The machine is locked – press to unlock</button></div>
++    <div id="homeRow">
++      <button id="bHome">Find home position</button>
++      <button id="bUnlock" hidden>Unlock without homing</button>
++    </div>
+   </section>
+ 
+   <section class="card" id="drop">
+@@ -122,7 +127,7 @@
+ 
+   var current = '';
+   function render(st) {
+-    state = st.state; alarm = st.alarm; current = st.current || '';
++    state = st.state; alarm = st.alarm; current = st.current || ''; var homing = !!st.homing;
+     if (!dirty) { files = st.files; repeat = st.repeat; }
+     var running = state === 'running' || state === 'paused';
+     var nChecked = files.filter(function (f) { return f.c; }).length;
+@@ -130,16 +135,18 @@
+     if (state === 'running') { setStatus('Running', 'run', current + (st.total > 1 ? '  (' + st.position + ' of ' + st.total + ')' : '')); }
+     else if (state === 'paused') { setStatus('Paused', 'pause', current); }
+     else if (state === 'ending') { setStatus('Stopping – going to the home position…', 'pause', ''); }
+-    else if (alarm) { setStatus('Machine locked', 'bad', st.message); }
++    else if (homing) { setStatus('Finding the home position…', 'pause', ''); }
++    else if (alarm) { setStatus('Press “Find home position”', 'bad', st.message); }
+     else { setStatus('Ready', '', st.message); }
+ 
+-    $('bStart').disabled = state !== 'idle' || alarm || nChecked === 0;
++    $('bStart').disabled = state !== 'idle' || alarm || homing || nChecked === 0;
+     var p = $('bPause');
+     p.disabled = !running;
+     p.textContent = state === 'paused' ? 'Resume' : 'Pause';
+     p.className = 'big' + (state === 'paused' ? ' resume' : '');
+     $('bEnd').disabled = state === 'ending';
+-    $('unlockRow').style.display = alarm && state === 'idle' ? 'block' : 'none';
++    $('bHome').disabled = running || state === 'ending' || homing;
++    $('bUnlock').hidden = !(alarm && state === 'idle');
+     $('bAdd').disabled = running || state === 'ending';
+     if (!dirty) { renderList(running || state === 'ending'); }
+     $('repeat').checked = repeat;
+@@ -227,6 +234,10 @@
+   $('bEnd').onclick = function () {
+     if (confirm('Stop now and return to the home position?')) { cmd('$Playlist/End').catch(function () { toast('Could not send.'); }); }
+   };
++  $('bHome').onclick = function () {
++    $('bHome').disabled = true;
++    cmd('$H').catch(function () { /* the request can time out while the machine homes; status shows progress */ });
++  };
+   $('bUnlock').onclick = function () { cmd('$X').catch(function () { toast('Could not unlock.'); }); };
+   $('repeat').onchange = function () { repeat = $('repeat').checked; save(); };
+   $('bAdd').onclick = function () { $('file').click(); };
+diff --git a/FluidNC/src/Playlist.cpp b/FluidNC/src/Playlist.cpp
+index b076f52b..3020dcd5 100644
+--- a/FluidNC/src/Playlist.cpp
++++ b/FluidNC/src/Playlist.cpp
+@@ -43,6 +43,9 @@ namespace {
+     // -------------------------------------------------------------- globals
+ 
+     const char* const CFG_FILE = "/playlist.cfg";
++    // End parks the carriage this far (mm, machine coordinates) from the home switches.
++    // Keep it larger than each axis' pulloff_mm so the switches are never pressed.
++    const char* const PARK_MM = "5";
+     const char* const GCODE_DIR = "/gcode";  // user G-code files live here, not in the LocalFS root
+ 
+     Macro    s_macro { "Playlist" };  // runs "$LocalFS/Run=..." or the go-home move
+@@ -239,6 +242,8 @@ namespace {
+         j += "\",\"message\":\"" + json_escape(s_message) + "\"";
+         j += ",\"alarm\":";
+         j += (state_is(State::Alarm) || state_is(State::ConfigAlarm)) ? "true" : "false";
++        j += ",\"homing\":";
++        j += state_is(State::Homing) ? "true" : "false";
+         j += ",\"repeat\":";
+         j += (s_state == PState::Idle ? repeat : s_repeat) ? "true" : "false";
+         j += ",\"current\":\"";
+@@ -324,7 +329,7 @@ namespace {
+             return Error::Ok;  // already running; ignore double clicks
+         }
+         if (machine_alarm()) {
+-            s_message = "The machine is locked. Press Unlock first.";
++            s_message = "The machine is locked. Press Find home first.";
+             return Error::Ok;
+         }
+         if (!state_is(State::Idle)) {
+@@ -442,7 +447,7 @@ namespace {
+ 
+                 case PState::Running:
+                     if (machine_alarm()) {
+-                        go_idle("The machine stopped (alarm). Press Unlock, then Start.");
++                        go_idle("The machine stopped (alarm). Press Find home, then Start.");
+                         return;
+                     }
+                     if (Job::active()) {
+@@ -470,7 +475,7 @@ namespace {
+ 
+                 case PState::Between:
+                     if (machine_alarm()) {
+-                        go_idle("The machine stopped (alarm). Press Unlock, then Start.");
++                        go_idle("The machine stopped (alarm). Press Find home, then Start.");
+                         return;
+                     }
+                     if (s_held || !state_is(State::Idle)) {
+@@ -534,19 +539,19 @@ namespace {
+                         return;
+                     }
+                     if (machine_alarm()) {
+-                        go_idle("Stopped, but the machine raised an alarm. Press Unlock.");
++                        go_idle("Stopped, but the machine raised an alarm. Press Find home.");
+                         return;
+                     }
+                     if (!Job::active() && state_is(State::Idle)) {
+                         s_end_stage = 4;
+                     } else if (older_than(s_stage_time, 8000)) {
+-                        go_idle("Could not stop cleanly. Press Unlock.");
++                        go_idle("Could not stop cleanly. Press Find home.");
+                     }
+                     return;
+-                case 4:  // go to the home position: machine zero (no homing cycle, so no limit switches are needed)
++                case 4:  // go to the home position: parking position just off the home switches (no homing cycle)
+                     s_state      = PState::GoingHome;
+                     s_stage_time = now();
+-                    launch_macro("G90&G53 G0 X0 Y0");
++                    launch_macro(std::string("G90&G53 G0 X") + PARK_MM + " Y" + PARK_MM);
+                     return;
+             }
+         }
+-- 
+2.43.0
+
+
+From 5bc4d088507b7e2d4757d4f5e3ceca46f606beb6 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 8 Nov 2026 10:52:40 +0400
+Subject: [PATCH 2/2] Playlist: home automatically after power-up; ask the
+ operator only if homing fails
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017as23f6rrSpig18HHFh51A
+---
+ FluidNC/data/ui/kiosk/index.html | 20 ++++-----
+ FluidNC/src/Playlist.cpp         | 74 +++++++++++++++++++++++++++++++-
+ 2 files changed, 82 insertions(+), 12 deletions(-)
+
+diff --git a/FluidNC/data/ui/kiosk/index.html b/FluidNC/data/ui/kiosk/index.html
+index bf29982c..ad7463cf 100644
+--- a/FluidNC/data/ui/kiosk/index.html
++++ b/FluidNC/data/ui/kiosk/index.html
+@@ -25,9 +25,9 @@
+   #bStart { background: var(--green); } #bPause { background: var(--amber); color: #1c2330; } #bEnd { background: var(--red); }
+   #bPause.resume { background: var(--blue); color: #fff; }
+   button:disabled { background: var(--disabled) !important; color: var(--muted) !important; cursor: not-allowed; }
+-  #homeRow { margin-top: 12px; display: flex; gap: 12px; flex-wrap: wrap; }
++  #homeRow { margin-top: 12px; gap: 12px; flex-wrap: wrap; } #homeRow:not([hidden]) { display: flex; }
+   #homeRow button { background: var(--blue); padding: 14px 18px; font-size: 20px; }
+-  #bUnlock { background: var(--disabled) !important; color: var(--text, #fff) !important; font-size: 16px !important; }
++  #bUnlock { background: var(--disabled) !important; color: var(--text, #fff) !important; }
+   h2 { margin: 0 0 4px; font-size: 20px; }
+   .hint { color: var(--muted); font-size: 16px; margin: 0 0 12px; }
+   ul { list-style: none; margin: 0; padding: 0; }
+@@ -58,9 +58,9 @@
+       <button id="bPause" class="big" disabled>Pause</button>
+       <button id="bEnd" class="big" disabled>End</button>
+     </div>
+-    <div id="homeRow">
+-      <button id="bHome">Find home position</button>
+-      <button id="bUnlock" hidden>Unlock without homing</button>
++    <div id="homeRow" hidden>
++      <button id="bHome">Try homing again</button>
++      <button id="bUnlock">Continue without homing</button>
+     </div>
+   </section>
+ 
+@@ -135,8 +135,8 @@
+     if (state === 'running') { setStatus('Running', 'run', current + (st.total > 1 ? '  (' + st.position + ' of ' + st.total + ')' : '')); }
+     else if (state === 'paused') { setStatus('Paused', 'pause', current); }
+     else if (state === 'ending') { setStatus('Stopping – going to the home position…', 'pause', ''); }
+-    else if (homing) { setStatus('Finding the home position…', 'pause', ''); }
+-    else if (alarm) { setStatus('Press “Find home position”', 'bad', st.message); }
++    else if (homing) { setStatus('Finding the home position…', 'pause', 'The machine will move by itself.'); }
++    else if (alarm) { setStatus(st.homefail ? 'Homing failed' : 'Machine locked', 'bad', st.message); }
+     else { setStatus('Ready', '', st.message); }
+ 
+     $('bStart').disabled = state !== 'idle' || alarm || homing || nChecked === 0;
+@@ -145,8 +145,7 @@
+     p.textContent = state === 'paused' ? 'Resume' : 'Pause';
+     p.className = 'big' + (state === 'paused' ? ' resume' : '');
+     $('bEnd').disabled = state === 'ending';
+-    $('bHome').disabled = running || state === 'ending' || homing;
+-    $('bUnlock').hidden = !(alarm && state === 'idle');
++    $('homeRow').hidden = !(alarm && state === 'idle' && !homing);
+     $('bAdd').disabled = running || state === 'ending';
+     if (!dirty) { renderList(running || state === 'ending'); }
+     $('repeat').checked = repeat;
+@@ -235,8 +234,7 @@
+     if (confirm('Stop now and return to the home position?')) { cmd('$Playlist/End').catch(function () { toast('Could not send.'); }); }
+   };
+   $('bHome').onclick = function () {
+-    $('bHome').disabled = true;
+-    cmd('$H').catch(function () { /* the request can time out while the machine homes; status shows progress */ });
++    cmd('$Playlist/Home').catch(function () { /* the request can time out while the machine homes; status shows progress */ });
+   };
+   $('bUnlock').onclick = function () { cmd('$X').catch(function () { toast('Could not unlock.'); }); };
+   $('repeat').onchange = function () { repeat = $('repeat').checked; save(); };
+diff --git a/FluidNC/src/Playlist.cpp b/FluidNC/src/Playlist.cpp
+index 3020dcd5..053943ef 100644
+--- a/FluidNC/src/Playlist.cpp
++++ b/FluidNC/src/Playlist.cpp
+@@ -20,6 +20,7 @@
+ #include "Logging.h"
+ #include "FluidPath.h"
+ #include "Machine/Axes.h"
++#include "Machine/Homing.h"
+ 
+ #include <freertos/FreeRTOS.h>
+ #include <freertos/task.h>
+@@ -53,6 +54,16 @@ namespace {
+     volatile bool s_launch_ok   = false;
+ 
+     PState                   s_state = PState::Idle;
++
++    // Homing at power-up and on request.  The machine homes itself shortly after boot;
++    // only if that fails does the page ask the operator what to do.
++    enum class HState { None, Requested, Running };
++    HState   s_hstate         = HState::None;
++    TickType_t s_h_t0         = 0;
++    bool     s_home_auto_done = false;
++    bool     s_home_failed    = false;
++    const uint32_t BOOT_HOME_DELAY_MS = 4000;  // let WiFi and the rest finish starting first
++
+     std::vector<std::string> s_seq;  // names captured at Start
+     size_t                   s_idx = 0;
+     bool                     s_repeat = false;
+@@ -243,7 +254,10 @@ namespace {
+         j += ",\"alarm\":";
+         j += (state_is(State::Alarm) || state_is(State::ConfigAlarm)) ? "true" : "false";
+         j += ",\"homing\":";
+-        j += state_is(State::Homing) ? "true" : "false";
++        bool auto_pending = !s_home_auto_done && !s_home_failed && Machine::Homing::unhomed_axes() && state_is(State::Alarm);
++        j += (state_is(State::Homing) || s_hstate != HState::None || auto_pending) ? "true" : "false";
++        j += ",\"homefail\":";
++        j += s_home_failed ? "true" : "false";
+         j += ",\"repeat\":";
+         j += (s_state == PState::Idle ? repeat : s_repeat) ? "true" : "false";
+         j += ",\"current\":\"";
+@@ -276,6 +290,48 @@ namespace {
+         s_message        = message;
+     }
+ 
++    void request_homing(const char* message) {
++        s_home_failed = false;
++        s_message     = message;
++        s_hstate      = HState::Requested;
++        s_h_t0        = now();
++        protocol_send_event(&homingButtonEvent);
++    }
++
++    // Called from poll(): follow a homing request through to success or failure.
++    void homing_step() {
++        switch (s_hstate) {
++            case HState::None:
++                // Power-up: home once, automatically, when the machine is waiting for it.
++                if (!s_home_auto_done && s_state == PState::Idle && older_than(0, BOOT_HOME_DELAY_MS) && state_is(State::Alarm) &&
++                    Machine::Homing::unhomed_axes()) {
++                    s_home_auto_done = true;
++                    request_homing("Finding the home position…");
++                }
++                break;
++            case HState::Requested:
++                if (state_is(State::Homing)) {
++                    s_hstate = HState::Running;
++                } else if (older_than(s_h_t0, 5000)) {
++                    s_hstate      = HState::None;
++                    s_home_failed = true;
++                    s_message     = "Homing did not start.";
++                }
++                break;
++            case HState::Running:
++                if (!state_is(State::Homing)) {
++                    s_hstate = HState::None;
++                    if (state_is(State::Idle) && !Machine::Homing::unhomed_axes()) {
++                        s_message = "Home position found.";
++                    } else {
++                        s_home_failed = true;
++                        s_message     = "Homing failed. Check that nothing blocks the machine and the switches work.";
++                    }
++                }
++                break;
++        }
++    }
++
+     void launch_current() {
+         s_abort0 = Job::abort_count();
+         launch_macro(std::string("$LocalFS/Run=") + GCODE_DIR + "/" + s_seq[s_idx]);
+@@ -323,6 +379,19 @@ namespace {
+         return Error::Ok;
+     }
+ 
++    // $Playlist/Home   (try again after a failed homing)
++    Error cmd_home(const char*, AuthenticationLevel, Channel& out) {
++        if (s_state != PState::Idle || s_hstate != HState::None) {
++            return Error::Ok;
++        }
++        if (state_is(State::Cycle) || state_is(State::Hold) || state_is(State::Jog)) {
++            s_message = "The machine is busy.";
++            return Error::Ok;
++        }
++        request_homing("Finding the home position…");
++        return Error::Ok;
++    }
++
+     // $Playlist/Start
+     Error cmd_start(const char*, AuthenticationLevel, Channel& out) {
+         if (s_state != PState::Idle) {
+@@ -414,10 +483,13 @@ namespace {
+             new ReportCommand("PLP", "Playlist/Pause", cmd_pause, anyState, WG);
+             new ReportCommand("PLR", "Playlist/Resume", cmd_resume, anyState, WG);
+             new ReportCommand("PLE", "Playlist/End", cmd_end, anyState, WG);
++            new ReportCommand("PLH", "Playlist/Home", cmd_home, anyState, WG);
+             log_info("Playlist ready");
+         }
+ 
+         void poll() override {
++            homing_step();
++
+             // Resume after a user pause, once the hold has finished
+             if (s_resume_pending) {
+                 if (state_is(State::Hold)) {
+-- 
+2.43.0
+

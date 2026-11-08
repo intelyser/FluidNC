@@ -25,7 +25,9 @@
   #bStart { background: var(--green); } #bPause { background: var(--amber); color: #1c2330; } #bEnd { background: var(--red); }
   #bPause.resume { background: var(--blue); color: #fff; }
   button:disabled { background: var(--disabled) !important; color: var(--muted) !important; cursor: not-allowed; }
-  #unlockRow { display: none; margin-top: 12px; } #unlockRow button { background: var(--blue); padding: 14px 18px; font-size: 20px; }
+  #homeRow { margin-top: 12px; gap: 12px; flex-wrap: wrap; } #homeRow:not([hidden]) { display: flex; }
+  #homeRow button { background: var(--blue); padding: 14px 18px; font-size: 20px; }
+  #bUnlock { background: var(--disabled) !important; color: var(--text, #fff) !important; }
   h2 { margin: 0 0 4px; font-size: 20px; }
   .hint { color: var(--muted); font-size: 16px; margin: 0 0 12px; }
   ul { list-style: none; margin: 0; padding: 0; }
@@ -56,7 +58,10 @@
       <button id="bPause" class="big" disabled>Pause</button>
       <button id="bEnd" class="big" disabled>End</button>
     </div>
-    <div id="unlockRow"><button id="bUnlock">The machine is locked – press to unlock</button></div>
+    <div id="homeRow" hidden>
+      <button id="bHome">Try homing again</button>
+      <button id="bUnlock">Continue without homing</button>
+    </div>
   </section>
 
   <section class="card" id="drop">
@@ -122,7 +127,7 @@
 
   var current = '';
   function render(st) {
-    state = st.state; alarm = st.alarm; current = st.current || '';
+    state = st.state; alarm = st.alarm; current = st.current || ''; var homing = !!st.homing;
     if (!dirty) { files = st.files; repeat = st.repeat; }
     var running = state === 'running' || state === 'paused';
     var nChecked = files.filter(function (f) { return f.c; }).length;
@@ -130,16 +135,17 @@
     if (state === 'running') { setStatus('Running', 'run', current + (st.total > 1 ? '  (' + st.position + ' of ' + st.total + ')' : '')); }
     else if (state === 'paused') { setStatus('Paused', 'pause', current); }
     else if (state === 'ending') { setStatus('Stopping – going to the home position…', 'pause', ''); }
-    else if (alarm) { setStatus('Machine locked', 'bad', st.message); }
+    else if (homing) { setStatus('Finding the home position…', 'pause', 'The machine will move by itself.'); }
+    else if (alarm) { setStatus(st.homefail ? 'Homing failed' : 'Machine locked', 'bad', st.message); }
     else { setStatus('Ready', '', st.message); }
 
-    $('bStart').disabled = state !== 'idle' || alarm || nChecked === 0;
+    $('bStart').disabled = state !== 'idle' || alarm || homing || nChecked === 0;
     var p = $('bPause');
     p.disabled = !running;
     p.textContent = state === 'paused' ? 'Resume' : 'Pause';
     p.className = 'big' + (state === 'paused' ? ' resume' : '');
     $('bEnd').disabled = state === 'ending';
-    $('unlockRow').style.display = alarm && state === 'idle' ? 'block' : 'none';
+    $('homeRow').hidden = !(alarm && state === 'idle' && !homing);
     $('bAdd').disabled = running || state === 'ending';
     if (!dirty) { renderList(running || state === 'ending'); }
     $('repeat').checked = repeat;
@@ -226,6 +232,9 @@
   $('bPause').onclick = function () { cmd(state === 'paused' ? '$Playlist/Resume' : '$Playlist/Pause').catch(function () { toast('Could not send.'); }); };
   $('bEnd').onclick = function () {
     if (confirm('Stop now and return to the home position?')) { cmd('$Playlist/End').catch(function () { toast('Could not send.'); }); }
+  };
+  $('bHome').onclick = function () {
+    cmd('$Playlist/Home').catch(function () { /* the request can time out while the machine homes; status shows progress */ });
   };
   $('bUnlock').onclick = function () { cmd('$X').catch(function () { toast('Could not unlock.'); }); };
   $('repeat').onchange = function () { repeat = $('repeat').checked; save(); };
